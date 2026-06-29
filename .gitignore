@@ -1,0 +1,30 @@
+# 가중치 파일
+*.pt
+*.pth
+
+# 샘플 이미지 (실제 이미지는 제외, 어노테이션 XML은 포함)
+sample_images/*
+!sample_images/.gitkeep
+!sample_images/*.xml
+
+# 가상환경 / conda 환경은 로컬에서 관리
+
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# 빌드
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# 임시
+*.tmp
+*.log
