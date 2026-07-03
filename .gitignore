@@ -1,22 +1,20 @@
-# 가중치 파일
+# Model weights
 *.pt
 *.pth
 
-# 샘플 이미지 (실제 이미지는 제외, 어노테이션 XML은 포함)
+# Sample images
 sample_images/*
 !sample_images/.gitkeep
 !sample_images/*.xml
 
-# 가상환경 / conda 환경은 로컬에서 관리
-
-# Python 캐시
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 .Python
 
-# 빌드
+# Build outputs
 *.egg-info/
 dist/
 build/
@@ -25,6 +23,6 @@ build/
 .vscode/
 .idea/
 
-# 임시
+# Temporary files
 *.tmp
 *.log

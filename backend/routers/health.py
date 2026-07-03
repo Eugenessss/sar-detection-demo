@@ -1,10 +1,10 @@
 from fastapi import APIRouter
-from backend import models
+
+from backend.services.health_service import get_app_health
 
 router = APIRouter(tags=["health"])
 
 
 @router.get("/health")
 def health():
-    loaded, err = models.get_models_status()
-    return {"status": "ok", "models_loaded": loaded, "error": err}
+    return get_app_health()
