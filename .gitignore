@@ -23,6 +23,13 @@ build/
 .vscode/
 .idea/
 
+# Environment / secrets
+.env
+
 # Temporary files
 *.tmp
 *.log
+
+# AI tool  
+.agents
+.claude
