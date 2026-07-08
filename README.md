@@ -120,7 +120,55 @@ streamlit run frontend/app.py
 
 브라우저에서 `http://localhost:8501`로 접속합니다.
 
-프론트엔드의 기본 백엔드 주소는 `DOM_SAR_BACKEND_URL` 환경변수로 변경할 수 있습니다.
+## 프론트엔드 ↔ 백엔드 연동 방법
+
+프론트엔드(Streamlit)와 백엔드(FastAPI)는 서로 다른 두 프로세스이며, **HTTP API로만** 통신합니다. 프론트는 백엔드 파이썬 코드를 직접 import하지 않으므로, 두 서버를 서로 다른 포트·머신에서 띄워도 됩니다.
+
+```text
+[브라우저] ⇄ [Streamlit :8501] ──HTTP(requests)──> [FastAPI :8000] ──> 모델 / RDS MySQL
+              frontend/sar_api.py  →  GET /health, POST /sar/infer
+              frontend/eo_api.py   →  GET /health, POST /eo/infer
+              frontend/db_api.py   →  GET /db/health, /db/databases, /db/tables...
+```
+
+- 프론트에서 백엔드를 호출하는 코드는 `frontend/sar_api.py`, `frontend/eo_api.py`, `frontend/db_api.py` 세 클라이언트뿐입니다. 화면 코드는 이 클라이언트의 함수만 부릅니다.
+- 프론트가 바라보는 백엔드 주소는 `frontend/settings.py`의 `DEFAULT_BACKEND_URL`이며, 환경변수 `DOM_SAR_BACKEND_URL`로 정해집니다 (기본값 `http://localhost:8000`).
+- 백엔드 호출은 사용자의 브라우저가 아니라 Streamlit 서버(파이썬)가 수행하므로 **CORS 설정이 필요 없습니다.**
+
+### 연동 절차
+
+1. 백엔드를 먼저 실행합니다: `uvicorn backend.main:app --port 8000`
+2. 백엔드가 기본 주소(`http://localhost:8000`)가 아니라면, 프론트를 실행할 터미널에서 주소를 지정합니다.
+
+   ```powershell
+   $env:DOM_SAR_BACKEND_URL = "http://다른호스트:8000"   # 같은 PC의 8000 포트면 생략
+   ```
+
+3. 프론트엔드를 실행합니다: `streamlit run frontend/app.py`
+
+실행 순서가 바뀌어도 앱이 죽지는 않습니다. 백엔드가 꺼져 있으면 각 페이지에 "백엔드 연결 실패" 경고가 표시되고, 백엔드를 켠 뒤 페이지를 새로고침하면 됩니다.
+
+### 연동 확인
+
+백엔드 단독 확인 (브라우저에서 `http://localhost:8000/docs`(Swagger)를 열거나):
+
+```powershell
+Invoke-RestMethod http://localhost:8000/health      # 서버·SAR/EO 모델 상태
+Invoke-RestMethod http://localhost:8000/db/health   # DB(RDS) 접속 상태
+```
+
+프론트 화면에서 확인: SAR·EO 페이지의 "모델 로드됨/미로드" 배지와 DB 페이지의 "DB 연결됨" 표시는 모두 백엔드 응답을 그대로 반영합니다. 이 배지가 보이면 연동은 성공한 것입니다. **"모델 미로드"가 떠도 백엔드 연결 자체는 정상**이며, 가중치 파일만 채우면 됩니다.
+
+### 자주 겪는 문제
+
+| 증상 | 원인 / 해결 |
+| --- | --- |
+| 페이지에 "백엔드 연결 실패" 경고 | 백엔드가 안 떠 있음 → `uvicorn` 실행 후 새로고침. 주소가 다르면 `DOM_SAR_BACKEND_URL` 확인 |
+| "모델 미로드" 배지, `/sar/infer`·`/eo/infer`가 503 | 연동은 정상. `backend/checkpoints/`의 가중치 파일(`*.pt`, `*.pth`)이 없는 것 (git에 포함되지 않음) → 파일을 받아 넣고 백엔드 재시작 |
+| DB 페이지 "DB 연결 실패" | 백엔드를 실행한 위치의 `.env` 접속 정보(`DB_HOST` 등) 확인 (아래 "데이터베이스 연동" 참고) |
+| 포트가 이미 사용 중 | `uvicorn ... --port 8010`, `streamlit run ... --server.port 8502`처럼 변경. 백엔드 포트를 바꾸면 `DOM_SAR_BACKEND_URL`도 같이 변경 |
+
+새 도메인을 추가할 때는 같은 패턴을 따르면 됩니다: `backend/<domain>/api.py`의 라우터를 `backend/main.py`에 include하고, `frontend/<domain>_api.py`(HTTP 클라이언트)와 `frontend/<domain>_page.py`(화면)를 만들어 `frontend/app.py`에 페이지로 등록합니다.
 
 ## API
 
