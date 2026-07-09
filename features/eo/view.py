@@ -3,19 +3,14 @@
 사용자가 EO(일반 컬러 위성/항공 사진)를 올려 표적을 탐지하고 결과를 보는 페이지.
 구조는 sar/view.py와 같다: 입력 컨트롤 → 서비스 호출 → 결과(이미지+표) 표시.
 SAR과 달리 컬러 사진이므로 원본 색 그대로 표시한 위에 박스를 그린다.
-예전에는 HTTP로 백엔드를 호출했지만, 이제 eo/service.py를 직접 부른다.
 """
-import io
-import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 
 from features.eo import service
-from features.eo.image import load_image_rgb
 from features.eo.loader import load_eo_models
 from shared.viz import draw_boxes
 
@@ -64,7 +59,7 @@ def render_eo_controls() -> EoControls:
 # =====================================================================
 
 def render_detection_table(rows: List[Dict]) -> None:
-    """탐지된 표적 목록을 표(클래스·신뢰도·좌표)로 보여준다. 없으면 안내 문구."""
+    """탐지된 표적 목록을 표(클래스·신뢰도)로 보여준다. 없으면 안내 문구."""
     if not rows:
         st.info("탐지된 표적이 없습니다.")
         return
@@ -82,21 +77,17 @@ def render_detection_table(rows: List[Dict]) -> None:
     st.dataframe(dataframe, use_container_width=True, hide_index=True)
 
 
-def render_eo_result(result: Dict, scene_rgb: np.ndarray, elapsed_client: float) -> None:
+def render_eo_result(result: service.EoInferenceResult) -> None:
     """추론 결과를 요약 줄 → (왼쪽) 박스 그린 이미지 · (오른쪽) 검출 표로 그린다."""
-    detections = result["detections"]
-
-    st.success(
-        f"완료 {result.get('elapsed_sec', elapsed_client)}s | 탐지 {len(detections)}개"
-    )
+    st.success(f"완료 {result.elapsed_sec}s | 탐지 {len(result.detections)}개")
 
     # 왼쪽: 탐지 이미지, 오른쪽: 검출 결과 표
     image_col, table_col = st.columns([2, 1])
     with image_col:
         st.subheader("탐지 결과")
-        st.image(draw_boxes(scene_rgb, detections), use_container_width=True)
+        st.image(draw_boxes(result.scene, result.detections), use_container_width=True)
     with table_col:
-        render_detection_table(detections)
+        render_detection_table(result.detections)
 
 
 # =====================================================================
@@ -117,25 +108,17 @@ def render_eo_page() -> None:
         st.warning("이미지를 업로드하세요.")
         st.stop()
 
-    image_bytes = controls.image_file.getvalue()
-
     with st.spinner("추론 중입니다. CPU 환경에서는 시간이 걸릴 수 있습니다."):
-        started_at = time.time()
         try:
-            result = service.run_inference(image_bytes, controls.image_file.name)
+            result = service.run_inference(
+                controls.image_file.getvalue(),
+                controls.image_file.name,
+            )
         except service.ModelUnavailableError as exc:
             st.error(str(exc))
             st.stop()
+        except Exception as exc:
+            st.error(f"추론 실패: {exc}")
+            st.stop()
 
-    scene = _scene_from_upload(image_bytes, result)
-    render_eo_result(result, scene, elapsed_client=round(time.time() - started_at, 1))
-
-
-def _scene_from_upload(image_bytes: bytes, result: dict) -> np.ndarray:
-    """업로드 이미지를 원본 색 그대로 읽어온다. 실패하면 검은 배경으로 대체한다."""
-    scene_rgb = load_image_rgb(io.BytesIO(image_bytes))
-    if scene_rgb is not None:
-        return scene_rgb
-
-    width, height = result["image_size"]
-    return np.zeros((height, width, 3), dtype=np.uint8)
+    render_eo_result(result)

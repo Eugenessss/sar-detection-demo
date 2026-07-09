@@ -1,7 +1,7 @@
 """
 [DB 도메인 - 서비스]
 RDS MySQL 서버의 데이터베이스·테이블을 읽기 전용으로 조회하는 순수 파이썬 함수.
-예전 db/api.py의 FastAPI 엔드포인트에서 웹 계층을 걷어내 view.py가 직접 호출하게 만든 것이다.
+화면(view.py)이 직접 호출한다.
 안전을 위해 임의 SQL은 실행하지 않고, 존재하는 이름과 일치할 때만 조회한다(주입 방지).
 """
 from typing import Any, Dict, List, Optional, Tuple
@@ -55,13 +55,11 @@ def preview_table(database: str, table_name: str, limit: int = 50) -> Dict[str, 
             text(f"SELECT * FROM `{database}`.`{table_name}` LIMIT :limit"),
             {"limit": safe_limit},
         )
-        columns = list(result.keys())
         rows = [dict(row._mapping) for row in result]
 
     return {
         "database": database,
         "table": table_name,
-        "columns": columns,
         "row_count": len(rows),
         "rows": rows,
     }

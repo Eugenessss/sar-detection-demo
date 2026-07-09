@@ -2,7 +2,7 @@
 [DB 조회 화면]
 DB 서버(RDS MySQL)의 데이터베이스·테이블을 선택해 내용을 조회하는 페이지.
 흐름: 접속 확인 → DB 목록 → DB 선택 → 테이블 목록 → 테이블 선택 → '조회' → 결과를 표로 표시.
-예전에는 HTTP로 백엔드를 호출했지만, 이제 db/service.py를 직접 부른다.
+조회 로직은 db/service.py를 직접 부른다.
 """
 import pandas as pd
 import streamlit as st

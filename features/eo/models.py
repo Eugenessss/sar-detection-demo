@@ -1,6 +1,6 @@
 """
 [EO 도메인 - 모델 보관소]
-EO 탐지기(YOLO best.pt)를 앱이 켜질 때 한 번 메모리에 올려두고, 이후 요청마다 꺼내 쓰도록
+EO 탐지기(YOLO best.pt)를 딱 한 번 메모리에 올려두고, 이후 추론마다 꺼내 쓰도록
 보관하는 파일. 클래스 이름은 가중치 안에 들어 있으므로 모델에서 그대로 읽어온다.
 """
 import logging
@@ -32,7 +32,7 @@ def get_class_names() -> Dict[int, str]:
 
 
 def load_models(det_weight) -> Tuple[bool, Optional[str]]:
-    """앱 시작 시 한 번 호출: EO 탐지기 가중치를 메모리에 적재한다."""
+    """첫 사용 시 한 번 호출: EO 탐지기 가중치를 메모리에 적재한다."""
     global _det_model, _class_names, _models_loaded, _load_error
 
     # 1) 가중치 파일이 실제로 있는지 먼저 확인한다.

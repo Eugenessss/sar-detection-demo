@@ -8,26 +8,20 @@
   2) 결과 표시     : 요약 배너·검출 목록·탐지 이미지
   3) 페이지 진입점 : 좌우 레이아웃을 만들고 실행 흐름을 연결
 """
-import io
 import re
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 import pandas as pd
 import streamlit as st
 
 from features.sar import service
-from features.sar.image import load_scene_for_vis
 from features.sar.loader import load_sar_models
 from shared.viz import draw_boxes
 
 _SESSION_RESULT_KEY = "sar_last_result"
-_SESSION_SCENE_KEY = "sar_last_scene"
-_SESSION_ELAPSED_KEY = "sar_last_elapsed_client"
 _SESSION_UPLOAD_NAME_KEY = "sar_last_upload_name"
 _SESSION_FLASH_KEY = "sar_flash_message"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -114,22 +108,16 @@ def render_inference_controls() -> InferenceControls:
 # 2) 결과 표시
 # =====================================================================
 
-def _summary_parts(result: Dict, elapsed_client: float) -> List[str]:
-    """추론 결과에서 요약 배너에 보여줄 문구를 만든다."""
-    detections = result["detections"]
-    parts = [
-        f"완료 {result.get('elapsed_sec', elapsed_client)}s",
-        f"탐지 {len(detections)}개",
-        f"회전 {result['rotate_deg']}도 ({'자동' if result.get('auto_rotation') else '수동'})",
-    ]
-    if result.get("azimuth") is not None:
-        parts.append(f"방위각 {result['azimuth']}도")
-    return parts
-
-
-def render_run_summary(result: Dict, elapsed_client: float) -> None:
+def render_run_summary(result: service.SarInferenceResult) -> None:
     """실행 완료 후 소요 시간·탐지 수·회전 정보를 한 줄로 보여준다."""
-    st.success(" | ".join(_summary_parts(result, elapsed_client)))
+    parts = [
+        f"완료 {result.elapsed_sec}s",
+        f"탐지 {len(result.detections)}개",
+        f"회전 {result.rotate_deg}도 ({'자동' if result.auto_rotation else '수동'})",
+    ]
+    if result.azimuth is not None:
+        parts.append(f"방위각 {result.azimuth}도")
+    st.success(" | ".join(parts))
 
 
 def render_detection_table(rows: List[Dict]) -> List[int]:
@@ -301,21 +289,19 @@ def _update_saved_detections(rows: List[Dict]) -> None:
     """session_state에 저장된 마지막 결과의 detections를 갱신한다."""
     saved_result = st.session_state.get(_SESSION_RESULT_KEY)
     if saved_result is not None:
-        saved_result["detections"] = rows
-        saved_result["n_det"] = len(rows)
+        saved_result.detections = rows
         st.session_state[_SESSION_RESULT_KEY] = saved_result
 
 
 def render_result_panel(
-    result: Optional[Dict],
-    scene_rgb: Optional[np.ndarray],
+    result: Optional[service.SarInferenceResult],
     selected_indices: Optional[List[int]] = None,
 ) -> None:
     """우측 결과 카드에 placeholder 또는 박스 오버레이 이미지를 표시한다."""
     with st.container(border=True):
         st.subheader("탐지 결과")
 
-        if result is None or scene_rgb is None:
+        if result is None:
             st.markdown(
                 """
                 <div class="sar-placeholder">
@@ -327,9 +313,8 @@ def render_result_panel(
             )
             return
 
-        detections = result["detections"]
-        selected_detections = _detections_for_selection(detections, selected_indices or [])
-        st.image(draw_boxes(scene_rgb, selected_detections), use_container_width=True)
+        selected_detections = _detections_for_selection(result.detections, selected_indices or [])
+        st.image(draw_boxes(result.scene, selected_detections), use_container_width=True)
         if selected_indices:
             st.caption("선택한 행의 박스만 표시 중입니다. 표 선택을 해제하면 전체 박스가 표시됩니다.")
         else:
@@ -337,7 +322,7 @@ def render_result_panel(
 
         if st.button("최종 결과 이미지 저장", use_container_width=True):
             try:
-                saved_path = _save_annotated_result_image(result, scene_rgb)
+                saved_path = _save_annotated_result_image(result)
             except Exception as exc:
                 st.error(f"이미지 저장 실패: {exc}")
             else:
@@ -348,29 +333,26 @@ def render_result_panel(
 
 def run_inference_if_requested(
     controls: InferenceControls,
-) -> Tuple[Optional[Dict], Optional[np.ndarray], float, Optional[str]]:
-    """실행 버튼이 눌렸으면 백엔드에 추론을 요청하고 결과 표시용 이미지를 준비한다."""
+) -> Tuple[Optional[service.SarInferenceResult], Optional[str]]:
+    """실행 버튼이 눌렸으면 추론 서비스를 호출하고 (결과, 오류 메시지)를 돌려준다."""
     if not controls.run_clicked:
-        return None, None, 0.0, None
+        return None, None
 
     if controls.tif_file is None:
-        return None, None, 0.0, "이미지를 업로드하세요."
+        return None, "이미지를 업로드하세요."
 
-    tif_bytes = controls.tif_file.getvalue()
-
-    started_at = time.time()
     try:
         result = service.run_inference(
-            tif_bytes,
+            controls.tif_file.getvalue(),
             controls.tif_file.name,
             controls.rotate_k,
         )
     except service.ModelUnavailableError as exc:
-        return None, None, 0.0, str(exc)
+        return None, str(exc)
+    except Exception as exc:
+        return None, f"추론 실패: {exc}"
 
-    elapsed_client = round(time.time() - started_at, 1)
-    scene = _scene_from_upload(tif_bytes, result)
-    return result, scene, elapsed_client, None
+    return result, None
 
 
 def _detections_for_selection(detections: List[Dict], selected_indices: List[int]) -> List[Dict]:
@@ -383,22 +365,21 @@ def _detections_for_selection(detections: List[Dict], selected_indices: List[int
     return selected or detections
 
 
-def _save_annotated_result_image(result: Dict, scene_rgb: np.ndarray) -> Path:
+def _save_annotated_result_image(result: service.SarInferenceResult) -> Path:
     """최종 수정된 detections 전체를 반영한 결과 이미지를 outputs 폴더에 저장한다."""
     now = datetime.now()
     output_dir = _OUTPUT_ROOT / now.strftime("%Y-%m-%d") / _output_run_name(result, now)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    image = draw_boxes(scene_rgb, result["detections"])
+    image = draw_boxes(result.scene, result.detections)
     image_path = output_dir / "annotated.png"
     image.save(image_path)
     return image_path
 
 
-def _output_run_name(result: Dict, saved_at: datetime) -> str:
+def _output_run_name(result: service.SarInferenceResult, saved_at: datetime) -> str:
     """저장 폴더 이름에 쓸 안전한 실행 이름을 만든다."""
-    filename = result.get("filename") or "sar_result"
-    stem = Path(filename).stem
+    stem = Path(result.filename or "sar_result").stem
     safe_stem = re.sub(r"[^A-Za-z0-9_.-]+", "_", stem).strip("._") or "sar_result"
     return f"{saved_at:%Y%m%d_%H%M%S_%f}_{safe_stem}"
 
@@ -407,34 +388,16 @@ def _clear_saved_result() -> None:
     """파일이 바뀌거나 실패했을 때 이전 추론 결과를 지운다."""
     for key in [
         _SESSION_RESULT_KEY,
-        _SESSION_SCENE_KEY,
-        _SESSION_ELAPSED_KEY,
         _SESSION_UPLOAD_NAME_KEY,
         _SESSION_FLASH_KEY,
     ]:
         st.session_state.pop(key, None)
 
 
-def _save_result(
-    result: Dict,
-    scene: np.ndarray,
-    elapsed_client: float,
-    upload_name: Optional[str],
-) -> None:
+def _save_result(result: service.SarInferenceResult, upload_name: Optional[str]) -> None:
     """행 선택 rerun 이후에도 쓸 수 있게 마지막 추론 결과를 저장한다."""
     st.session_state[_SESSION_RESULT_KEY] = result
-    st.session_state[_SESSION_SCENE_KEY] = scene
-    st.session_state[_SESSION_ELAPSED_KEY] = elapsed_client
     st.session_state[_SESSION_UPLOAD_NAME_KEY] = upload_name
-
-
-def _load_saved_result() -> Tuple[Optional[Dict], Optional[np.ndarray], float]:
-    """마지막 추론 결과를 session_state에서 꺼낸다."""
-    return (
-        st.session_state.get(_SESSION_RESULT_KEY),
-        st.session_state.get(_SESSION_SCENE_KEY),
-        float(st.session_state.get(_SESSION_ELAPSED_KEY, 0.0)),
-    )
 
 
 def _sync_saved_result_with_upload(controls: InferenceControls) -> None:
@@ -462,40 +425,30 @@ def render_sar_page() -> None:
         controls = render_inference_controls()
     _sync_saved_result_with_upload(controls)
 
-    result, scene, elapsed_client = _load_saved_result()
+    result: Optional[service.SarInferenceResult] = st.session_state.get(_SESSION_RESULT_KEY)
     error_message: Optional[str] = None
 
     if controls.run_clicked and controls.tif_file is not None:
         with right_col:
             with st.spinner("추론 중입니다. CPU 환경에서는 시간이 걸릴 수 있습니다."):
-                result, scene, elapsed_client, error_message = run_inference_if_requested(controls)
+                result, error_message = run_inference_if_requested(controls)
         if error_message:
             _clear_saved_result()
-        elif result is not None and scene is not None:
-            _save_result(result, scene, elapsed_client, controls.tif_file.name)
+        elif result is not None:
+            _save_result(result, controls.tif_file.name)
     else:
-        _, _, _, error_message = run_inference_if_requested(controls)
+        _, error_message = run_inference_if_requested(controls)
 
     selected_indices: List[int] = []
     with left_col:
         if error_message:
             st.warning(error_message)
         if result is not None:
-            render_run_summary(result, elapsed_client)
+            render_run_summary(result)
             flash_message = st.session_state.pop(_SESSION_FLASH_KEY, None)
             if flash_message:
                 st.success(flash_message)
-            selected_indices = render_detection_table(result["detections"])
+            selected_indices = render_detection_table(result.detections)
 
     with right_col:
-        render_result_panel(result, scene, selected_indices)
-
-
-def _scene_from_upload(tif_bytes: bytes, result: dict) -> np.ndarray:
-    """업로드 이미지를 화면 표시용으로 읽어온다. 실패하면 검은 배경으로 대체한다."""
-    scene_rgb = load_scene_for_vis(io.BytesIO(tif_bytes))
-    if scene_rgb is not None:
-        return scene_rgb
-
-    width, height = result["image_size"]
-    return np.zeros((height, width, 3), dtype=np.uint8)
+        render_result_panel(result, selected_indices)

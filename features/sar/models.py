@@ -1,8 +1,8 @@
 """
 [SAR 도메인 - 모델 보관소]
-탐지기/분류기 모델과 클래스 이름을, 앱이 켜질 때 딱 한 번 메모리에 올려두고
-이후 요청마다 꺼내 쓰도록 보관하는 파일. (모듈 전역 변수에 담아 캐시 역할)
-- load_models(): 앱 시작 시 한 번 호출되어 모델을 메모리에 적재한다.
+탐지기/분류기 모델과 클래스 이름을 딱 한 번 메모리에 올려두고
+이후 추론마다 꺼내 쓰도록 보관하는 파일. (모듈 전역 변수에 담아 캐시 역할)
+- load_models(): 첫 사용 시 loader.py가 한 번 호출해 모델을 메모리에 적재한다.
 - get_*(): 적재된 모델/클래스 이름을 꺼내오는 창구.
 """
 import json
@@ -55,7 +55,7 @@ def map_type_to_group(type_name: str) -> str:
 
 
 def load_models(det_weight, cls_weight, cls_json) -> Tuple[bool, Optional[str]]:
-    """앱 시작 시 한 번 호출: 탐지기·분류기·클래스 정보를 메모리에 적재한다."""
+    """첫 사용 시 한 번 호출: 탐지기·분류기·클래스 정보를 메모리에 적재한다."""
     global _det_model, _classifier, _class_names, _type2group
     global _models_loaded, _load_error
 
