@@ -8,9 +8,9 @@ from typing import Dict, List
 
 import numpy as np
 
-from backend.sar.classify import classify_boxes_batch
-from backend.sar.detect import detect_on
-from backend.sar.rotation import _verify_inv_box, inv_box, rot_k
+from features.sar.classify import classify_boxes_batch
+from features.sar.detect import detect_on
+from features.sar.rotation import _verify_inv_box, inv_box, rot_k
 
 
 def run_full_inference(

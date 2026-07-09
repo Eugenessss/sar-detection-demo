@@ -6,9 +6,9 @@
 import os
 from pathlib import Path
 
-# 이 파일(config.py) 기준으로 backend/ 폴더를 가리킨다.
-BASE_DIR = Path(__file__).resolve().parents[1]
-# 모델/데이터가 놓인 최상위 폴더. 환경변수 SAR_ARTIFACT_DIR로 다른 위치를 지정할 수 있다.
+# 이 파일(features/sar/config.py) 기준으로 프로젝트 최상위 폴더를 가리킨다.
+BASE_DIR = Path(__file__).resolve().parents[2]
+# 모델/데이터(checkpoints/, results/)가 놓인 최상위 폴더. 환경변수 SAR_ARTIFACT_DIR로 다른 위치를 지정할 수 있다.
 ARTIFACT_DIR = Path(os.getenv("SAR_ARTIFACT_DIR", str(BASE_DIR)))
 
 # --- weight paths (가중치 파일 경로) ---

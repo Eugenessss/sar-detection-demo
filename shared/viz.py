@@ -1,16 +1,15 @@
 """
-[프론트엔드 - 시각화]
-백엔드가 돌려준 탐지 결과(박스 목록)를 실제 이미지 위에 클래스별 색상 박스와 라벨로 그려주는 파일.
+[공용 - 시각화]
+탐지 결과(박스 목록)를 이미지 위에 클래스별 색상 박스와 라벨로 그려주는 파일.
+SAR·EO 페이지가 똑같이 사용하는 진짜 공용 기능만 남겼다.
+(이미지 '로딩'은 도메인마다 방식이 달라 각 feature의 image.py에 있다.)
 화면에 크게 표시할 때 너무 큰 이미지는 적당히 줄인다.
-밝기 정규화는 공용 함수(shared/image_norm.py)를 재사용한다.
 """
 import hashlib
-from typing import Any, Dict, List, Optional
+from typing import Dict, List
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
-
-from shared.image_norm import normalize_to_uint8_rgb
 
 LABEL_COLORS = [
     "#F94144",
@@ -50,7 +49,7 @@ def draw_boxes(scene_rgb: np.ndarray, detections: List[Dict]) -> Image.Image:
     """이미지 위에 탐지된 박스와 라벨을 그려서 화면에 표시할 이미지를 만든다."""
     img = Image.fromarray(scene_rgb).convert("RGB")
     # 너무 큰 이미지는 화면 표시용으로 최대 1200px까지 줄인다 (박스 좌표도 같은 비율로 축소).
-    max_side = 1200
+    max_side = 2048
     scale = 1.0
     if max(img.width, img.height) > max_side:
         scale = max_side / max(img.width, img.height)
@@ -85,23 +84,3 @@ def draw_boxes(scene_rgb: np.ndarray, detections: List[Dict]) -> Image.Image:
         draw.text((bx1, by1 - font_size - 2), label, fill=text_color, font=font)
 
     return img
-
-
-def load_scene_for_vis(image_source: Any) -> Optional[np.ndarray]:
-    """SAR 이미지를 화면 표시용 RGB 배열로 읽어온다 (밝기 정규화 적용, 실패하면 None)."""
-    try:
-        arr = np.array(Image.open(image_source))
-        return normalize_to_uint8_rgb(arr)
-    except Exception:
-        return None
-
-
-def load_image_rgb(image_source: Any) -> Optional[np.ndarray]:
-    """EO(컬러 사진) 이미지를 원본 색 그대로 RGB 배열로 읽어온다 (실패하면 None).
-
-    SAR과 달리 EO는 이미 일반 컬러 사진이므로 밝기 정규화를 하지 않는다.
-    """
-    try:
-        return np.array(Image.open(image_source).convert("RGB"))
-    except Exception:
-        return None

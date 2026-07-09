@@ -8,8 +8,8 @@ from typing import Any, Dict, List, Union
 
 import numpy as np
 
-from backend.eo import config
-from backend.eo import models as _m
+from features.eo import config
+from features.eo import models as _m
 
 
 def detect_on(image: Union[str, np.ndarray]) -> List[Dict[str, Any]]:

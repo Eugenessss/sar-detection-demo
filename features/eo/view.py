@@ -1,8 +1,9 @@
 """
-[프론트엔드 - EO 탐지 화면]
+[EO 탐지 화면]
 사용자가 EO(일반 컬러 위성/항공 사진)를 올려 표적을 탐지하고 결과를 보는 페이지.
-구조는 sar_page.py와 같다: 입력 컨트롤 → 백엔드 호출 → 결과(이미지+표) 표시.
+구조는 sar/view.py와 같다: 입력 컨트롤 → 서비스 호출 → 결과(이미지+표) 표시.
 SAR과 달리 컬러 사진이므로 원본 색 그대로 표시한 위에 박스를 그린다.
+예전에는 HTTP로 백엔드를 호출했지만, 이제 eo/service.py를 직접 부른다.
 """
 import io
 import time
@@ -13,9 +14,10 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from eo_api import EoApiClient, EoApiError
-from settings import DEFAULT_BACKEND_URL
-from viz import draw_boxes, load_image_rgb
+from features.eo import service
+from features.eo.image import load_image_rgb
+from features.eo.loader import load_eo_models
+from shared.viz import draw_boxes
 
 
 # =====================================================================
@@ -25,7 +27,6 @@ from viz import draw_boxes, load_image_rgb
 @dataclass
 class EoControls:
     """입력 영역에서 사용자가 고른 값들을 한 꾸러미로 담아 전달한다."""
-    client: EoApiClient
     image_file: Optional[Any]
     run_clicked: bool
 
@@ -38,7 +39,6 @@ def render_eo_controls() -> EoControls:
         vertical_alignment="bottom",
     )
 
-    client = EoApiClient(DEFAULT_BACKEND_URL)
     with upload_col:
         image_file = st.file_uploader(
             "이미지 업로드 (JPG / PNG / TIF)",
@@ -46,21 +46,17 @@ def render_eo_controls() -> EoControls:
         )
 
     with action_col:
-        # EO 모델이 로드됐는지 상태를 표시한다 (health 응답의 eo 항목 사용).
-        try:
-            health = client.health()
-            eo_status = health.get("eo", {})
-            if eo_status.get("models_loaded"):
-                st.success("모델 로드됨")
-            else:
-                st.error(f"모델 미로드: {eo_status.get('error', '')}")
-        except EoApiError as exc:
-            st.warning(str(exc))
+        # EO 모델을 (프로세스당 1번) 로드하고 그 상태를 표시한다.
+        loaded, error = load_eo_models()
+        if loaded:
+            st.success("모델 로드됨")
+        else:
+            st.error(f"모델 미로드: {error or ''}")
         run_clicked = st.button("실행", type="primary", use_container_width=True)
 
     st.divider()
 
-    return EoControls(client=client, image_file=image_file, run_clicked=run_clicked)
+    return EoControls(image_file=image_file, run_clicked=run_clicked)
 
 
 # =====================================================================
@@ -108,7 +104,7 @@ def render_eo_result(result: Dict, scene_rgb: np.ndarray, elapsed_client: float)
 # =====================================================================
 
 def render_eo_page() -> None:
-    """EO 탐지 페이지 전체를 그린다: 입력 받기 → 실행 시 백엔드 호출 → 결과 표시."""
+    """EO 탐지 페이지 전체를 그린다: 입력 받기 → 실행 시 추론 → 결과 표시."""
     st.title("EO 표적 탐지")
     st.caption("YOLO 기반 EO(전자광학) 위성·항공 영상 표적 후보 탐지")
 
@@ -126,8 +122,8 @@ def render_eo_page() -> None:
     with st.spinner("추론 중입니다. CPU 환경에서는 시간이 걸릴 수 있습니다."):
         started_at = time.time()
         try:
-            result = controls.client.infer(image_file=controls.image_file)
-        except EoApiError as exc:
+            result = service.run_inference(image_bytes, controls.image_file.name)
+        except service.ModelUnavailableError as exc:
             st.error(str(exc))
             st.stop()
 

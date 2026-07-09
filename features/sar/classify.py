@@ -11,7 +11,7 @@ import torch
 import torchvision.transforms as T
 from PIL import Image
 
-from backend.sar import models as _m
+from features.sar import models as _m
 
 # 분류기에 넣기 전, 모든 조각을 동일한 형태(128x128, 3채널 텐서)로 맞추는 전처리 규칙.
 _cls_transform = T.Compose(

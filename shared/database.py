@@ -1,9 +1,11 @@
 """
-[DB 도메인 - 연결 설정]
+[공용 - DB 연결]
 AWS RDS의 MySQL 서버에 접속하기 위한 설정과 연결 객체(engine)를 만드는 파일.
 접속 정보(주소·계정·비밀번호)는 보안을 위해 코드에 직접 쓰지 않고, 프로젝트 루트의
 .env 파일이나 실행 환경의 환경변수에서 읽어온다. (예시는 .env.example 참고)
 
+특정 페이지에 묶이지 않는 인프라 기능이라 shared/ 아래에 둔다.
+(지금은 DB 조회 페이지만 쓰지만, 추론 결과 저장 등 다른 feature도 여기로 접속한다.)
 engine은 앱이 실제로 DB를 처음 쓸 때 한 번만 만들어 재사용한다.
 그래서 DB 정보가 없어도 이 파일을 import하는 것만으로는 에러가 나지 않는다.
 """
@@ -16,7 +18,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
 # 프로젝트 루트(.env가 놓인 곳)를 찾아 접속 정보를 환경변수로 불러온다.
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(_PROJECT_ROOT / ".env")
 
 _engine: Optional[Engine] = None   # 한 번 만든 연결 객체를 담아 재사용
@@ -56,6 +58,6 @@ def ping() -> Tuple[bool, Optional[str]]:
 
 
 if __name__ == "__main__":
-    # 터미널에서 `python -m backend.db.connection` 으로 접속 여부만 빠르게 확인할 수 있다.
+    # 터미널에서 `python -m shared.database` 으로 접속 여부만 빠르게 확인할 수 있다.
     ok, err = ping()
     print("DB 연결 성공" if ok else f"DB 연결 실패: {err}")

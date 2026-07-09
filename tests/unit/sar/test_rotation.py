@@ -1,6 +1,6 @@
 """
 [테스트 - 회전/좌표 변환]
-backend/sar/rotation.py의 좌표 계산이 정확한지 검증하는 단위 테스트.
+features/sar/rotation.py의 좌표 계산이 정확한지 검증하는 단위 테스트.
 버그가 나기 쉬운 순수 수학 로직이라 우선적으로 테스트를 붙여둔다.
 'python -m unittest discover tests'로 실행한다.
 """
@@ -8,7 +8,7 @@ import unittest
 
 import numpy as np
 
-from backend.sar.rotation import inv_box, parse_azi, rot_k
+from features.sar.rotation import inv_box, parse_azi, rot_k
 
 
 def _dims_after(width: int, height: int, k: int) -> tuple[int, int]:

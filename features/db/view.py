@@ -1,13 +1,13 @@
 """
-[프론트엔드 - DB 조회 화면]
+[DB 조회 화면]
 DB 서버(RDS MySQL)의 데이터베이스·테이블을 선택해 내용을 조회하는 페이지.
 흐름: 접속 확인 → DB 목록 → DB 선택 → 테이블 목록 → 테이블 선택 → '조회' → 결과를 표로 표시.
+예전에는 HTTP로 백엔드를 호출했지만, 이제 db/service.py를 직접 부른다.
 """
 import pandas as pd
 import streamlit as st
 
-from db_api import DbApiClient, DbApiError
-from settings import DEFAULT_BACKEND_URL
+from features.db import service
 
 
 def render_db_page() -> None:
@@ -15,27 +15,20 @@ def render_db_page() -> None:
     st.title("DB 조회")
     st.caption("RDS MySQL 데이터베이스·테이블 조회")
 
-    client = DbApiClient(DEFAULT_BACKEND_URL)
-
     # 1) DB 접속 상태를 먼저 확인한다.
-    try:
-        health = client.health()
-    except DbApiError as exc:
-        st.error(str(exc))
-        st.stop()
-
-    if not health.get("connected"):
-        st.error(f"DB 연결 실패: {health.get('error', '')}")
-        st.info("backend 실행 위치의 .env 파일에서 접속 정보(DB_HOST 등)를 확인하세요.")
+    connected, error = service.check_connection()
+    if not connected:
+        st.error(f"DB 연결 실패: {error or ''}")
+        st.info("프로젝트 루트의 .env 파일에서 접속 정보(DB_HOST 등)를 확인하세요.")
         st.stop()
 
     st.success("DB 연결됨")
 
     # 2) 데이터베이스 목록을 받아온다.
     try:
-        databases = client.list_databases().get("databases", [])
-    except DbApiError as exc:
-        st.error(str(exc))
+        databases = service.list_databases()
+    except Exception as exc:
+        st.error(f"DB 조회 실패: {exc}")
         st.stop()
 
     if not databases:
@@ -47,9 +40,9 @@ def render_db_page() -> None:
 
     # 4) 선택한 데이터베이스의 테이블 목록을 받아온다.
     try:
-        tables = client.list_tables(database).get("tables", [])
-    except DbApiError as exc:
-        st.error(str(exc))
+        tables = service.list_tables(database)
+    except Exception as exc:
+        st.error(f"DB 조회 실패: {exc}")
         st.stop()
 
     if not tables:
@@ -73,9 +66,9 @@ def render_db_page() -> None:
     # 6) 선택한 테이블을 조회해 표로 보여준다.
     with st.spinner("조회 중..."):
         try:
-            result = client.preview_table(database, table_name, limit=int(limit))
-        except DbApiError as exc:
-            st.error(str(exc))
+            result = service.preview_table(database, table_name, limit=int(limit))
+        except Exception as exc:
+            st.error(f"조회 실패: {exc}")
             st.stop()
 
     rows = result.get("rows", [])

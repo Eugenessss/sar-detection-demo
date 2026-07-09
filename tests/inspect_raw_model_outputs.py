@@ -113,8 +113,8 @@ def _summarize_yolo_result(result: Any, limit: int) -> Dict[str, Any]:
 
 def inspect_eo(image: Path, limit: int) -> Dict[str, Any]:
     """EO YOLO 모델의 Results 원본 구조를 확인한다."""
-    from backend.eo.config import DET_CONF, DET_IMGSZ, DET_WEIGHT
-    from backend.eo.models import get_models_status, get_detector_model, load_models
+    from features.eo.config import DET_CONF, DET_IMGSZ, DET_WEIGHT
+    from features.eo.models import get_models_status, get_detector_model, load_models
 
     ok, err = load_models(DET_WEIGHT)
     if not ok:
@@ -141,8 +141,8 @@ def inspect_eo(image: Path, limit: int) -> Dict[str, Any]:
 
 
 def _iter_sar_tiles(scene_rgb: np.ndarray, max_tiles: int) -> Iterable[Dict[str, Any]]:
-    from backend.sar import config
-    from backend.sar.detect import _tile_starts
+    from features.sar import config
+    from features.sar.detect import _tile_starts
 
     tile = config.DET_TILE_SIZE
     stride = max(1, int(round(tile * (1 - config.DET_OVERLAP))))
@@ -165,11 +165,11 @@ def _iter_sar_tiles(scene_rgb: np.ndarray, max_tiles: int) -> Iterable[Dict[str,
 
 def inspect_sar_yolo(image: Path, rotate_k: int, limit: int, max_tiles: int) -> Dict[str, Any]:
     """SAR YOLO 탐지기의 타일별 Results 원본 구조를 확인한다."""
-    from backend.sar import config
-    from backend.sar.config import CLS_JSON, CLS_WEIGHT, DET_WEIGHT
-    from backend.sar.image import load_dom_rgb
-    from backend.sar.models import get_detector_model, get_models_status, load_models
-    from backend.sar.rotation import rot_k
+    from features.sar import config
+    from features.sar.config import CLS_JSON, CLS_WEIGHT, DET_WEIGHT
+    from features.sar.image import load_dom_rgb
+    from features.sar.models import get_detector_model, get_models_status, load_models
+    from features.sar.rotation import rot_k
 
     ok, err = load_models(DET_WEIGHT, CLS_WEIGHT, CLS_JSON)
     if not ok:
@@ -206,11 +206,11 @@ def inspect_sar_yolo(image: Path, rotate_k: int, limit: int, max_tiles: int) -> 
 
 def inspect_sar_cls(image: Path, boxes: Optional[List[List[float]]], limit: int) -> Dict[str, Any]:
     """SAR ConvNeXt 분류기의 logits/probs 원본 텐서를 확인한다."""
-    from backend.sar.classify import _cls_transform, _extract_chip
-    from backend.sar.config import CLS_JSON, CLS_WEIGHT, DET_WEIGHT
-    from backend.sar.detect import detect_on
-    from backend.sar.image import load_dom_rgb
-    from backend.sar.models import get_class_names, get_classifier, load_models
+    from features.sar.classify import _cls_transform, _extract_chip
+    from features.sar.config import CLS_JSON, CLS_WEIGHT, DET_WEIGHT
+    from features.sar.detect import detect_on
+    from features.sar.image import load_dom_rgb
+    from features.sar.models import get_class_names, get_classifier, load_models
 
     ok, err = load_models(DET_WEIGHT, CLS_WEIGHT, CLS_JSON)
     if not ok:
@@ -265,14 +265,14 @@ def inspect_sar_cls(image: Path, boxes: Optional[List[List[float]]], limit: int)
 
 def inspect_sar_all(image: Path, rotate_k: int, limit: int) -> Dict[str, Any]:
     """현재 SAR 파이프라인 최종 결과와 ConvNeXt 원본 logits/probs를 함께 확인한다."""
-    from backend.sar.api import load_default_models
-    from backend.sar.classify import _cls_transform, _extract_chip
-    from backend.sar.detect import detect_on
-    from backend.sar.image import load_dom_rgb
-    from backend.sar.models import get_class_names, get_classifier
-    from backend.sar.rotation import inv_box, rot_k
+    from features.sar.classify import _cls_transform, _extract_chip
+    from features.sar.config import CLS_JSON, CLS_WEIGHT, DET_WEIGHT
+    from features.sar.detect import detect_on
+    from features.sar.image import load_dom_rgb
+    from features.sar.models import get_class_names, get_classifier, load_models
+    from features.sar.rotation import inv_box, rot_k
 
-    ok, err = load_default_models()
+    ok, err = load_models(DET_WEIGHT, CLS_WEIGHT, CLS_JSON)
     if not ok:
         return {"task": "sar-all", "loaded": False, "error": err}
 

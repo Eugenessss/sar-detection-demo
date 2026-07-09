@@ -1,5 +1,5 @@
 """
-[프론트엔드 - SAR 추론 화면]
+[SAR 추론 화면]
 사용자가 실제로 보는 SAR 추론 페이지.
 좌측에는 입력·요약·검출 목록을 두고, 우측에는 박스가 그려진 탐지 결과 이미지를 보여준다.
 
@@ -20,16 +20,17 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from sar_api import SarApiClient, SarApiError
-from settings import DEFAULT_BACKEND_URL
-from viz import draw_boxes, load_scene_for_vis
+from features.sar import service
+from features.sar.image import load_scene_for_vis
+from features.sar.loader import load_sar_models
+from shared.viz import draw_boxes
 
 _SESSION_RESULT_KEY = "sar_last_result"
 _SESSION_SCENE_KEY = "sar_last_scene"
 _SESSION_ELAPSED_KEY = "sar_last_elapsed_client"
 _SESSION_UPLOAD_NAME_KEY = "sar_last_upload_name"
 _SESSION_FLASH_KEY = "sar_flash_message"
-_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _OUTPUT_ROOT = _PROJECT_ROOT / "outputs" / "sar"
 
 
@@ -40,7 +41,6 @@ _OUTPUT_ROOT = _PROJECT_ROOT / "outputs" / "sar"
 @dataclass
 class InferenceControls:
     """입력 영역에서 사용자가 고른 값들을 한 꾸러미로 담아 전달한다."""
-    client: SarApiClient
     tif_file: Optional[Any]
     rotate_k: int
     run_clicked: bool
@@ -77,8 +77,6 @@ def _inject_layout_css() -> None:
 
 def render_inference_controls() -> InferenceControls:
     """회전·파일 업로드·실행 버튼을 그리고, 사용자가 고른 값을 돌려준다."""
-    client = SarApiClient(DEFAULT_BACKEND_URL)
-
     with st.container(border=True):
         st.subheader("입력")
 
@@ -96,19 +94,16 @@ def render_inference_controls() -> InferenceControls:
             type=["tif", "tiff", "png", "jpg", "jpeg"],
         )
 
-        try:
-            health = client.health()
-            if health.get("models_loaded"):
-                st.success("모델 로드됨")
-            else:
-                st.error(f"모델 미로드: {health.get('error', '')}")
-        except SarApiError as exc:
-            st.warning(str(exc))
+        # SAR 모델을 (프로세스당 1번) 로드하고 그 상태를 표시한다.
+        loaded, error = load_sar_models()
+        if loaded:
+            st.success("모델 로드됨")
+        else:
+            st.error(f"모델 미로드: {error or ''}")
 
         run_clicked = st.button("실행", type="primary", use_container_width=True)
 
     return InferenceControls(
-        client=client,
         tif_file=tif_file,
         rotate_k=rotate_k,
         run_clicked=run_clicked,
@@ -365,11 +360,12 @@ def run_inference_if_requested(
 
     started_at = time.time()
     try:
-        result = controls.client.infer(
-            tif_file=controls.tif_file,
-            rotate_k=controls.rotate_k,
+        result = service.run_inference(
+            tif_bytes,
+            controls.tif_file.name,
+            controls.rotate_k,
         )
-    except SarApiError as exc:
+    except service.ModelUnavailableError as exc:
         return None, None, 0.0, str(exc)
 
     elapsed_client = round(time.time() - started_at, 1)
@@ -453,8 +449,8 @@ def _sync_saved_result_with_upload(controls: InferenceControls) -> None:
 # 3) 페이지 진입점
 # =====================================================================
 
-def render_inference_page() -> None:
-    """추론 페이지 전체를 그린다: 입력 받기 → 실행 시 백엔드 호출 → 결과 표시."""
+def render_sar_page() -> None:
+    """SAR 추론 페이지 전체를 그린다: 입력 받기 → 실행 시 추론 → 결과 표시."""
     _inject_layout_css()
 
     st.title("DOM SAR 차량 탐지")

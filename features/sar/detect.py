@@ -8,8 +8,8 @@ from typing import Dict, List
 
 import numpy as np
 
-from backend.sar import config
-from backend.sar import models as _m
+from features.sar import config
+from features.sar import models as _m
 
 _BATCH = 16   # YOLO에 한 번에 넣는 타일 개수
 
