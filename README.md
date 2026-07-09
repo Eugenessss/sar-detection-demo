@@ -13,8 +13,9 @@ demo/
 ├─ placeholders.py              # 임시(빈) 페이지 렌더러
 ├─ features/                    # 페이지(기능) 단위 모듈
 │  ├─ sar/
-│  │  ├─ view.py                # SAR 추론 화면 (입력 → 실행 → 결과 표시)
+│  │  ├─ view.py                # SAR 추론 화면 (입력 → 실행 → 결과 표시 → DB 저장)
 │  │  ├─ service.py             # 추론 유스케이스 (임시저장 → 로딩 → 회전 → 파이프라인 → 결과 조립)
+│  │  ├─ repository.py          # satellite_intel 조회/저장 (이미지 정보, 탐지 집계)
 │  │  ├─ loader.py              # @st.cache_resource 모델 1회 로드
 │  │  ├─ pipeline.py            # 탐지+분류 파이프라인 (회전 → 탐지 → 분류 → 좌표 복원)
 │  │  ├─ detect.py              # YOLO 기반 탐지
@@ -140,6 +141,18 @@ python -m shared.database
 ```
 
 관련 코드는 `shared/database.py`(연결 설정 — 인프라)와 `features/db/`(조회 화면·로직)에 있습니다. 안전을 위해 임의 SQL 실행은 제공하지 않고, 읽기 전용 조회(데이터베이스/테이블 목록, 상위 행 미리보기)만 지원합니다.
+
+### SAR 페이지 DB 연동 (satellite_intel)
+
+SAR 페이지는 `satellite_intel` 스키마와 연동됩니다 (`features/sar/repository.py`).
+
+- **업로드 파일명이 image_id 역할**을 합니다 (예: `8192.tif` → `image_analysis`의 image_id 8192).
+- 추론이 끝나면 `image_analysis`에서 자산·지역·센서·촬영시각을 조회해 "투입 이미지 정보"로 보여줍니다.
+- **"DB 저장" 버튼**을 누르면 최종 검출목록(편집 반영)을 클래스별로 집계해 `detection_result`에 저장합니다.
+  - `created_at` = 버튼을 누른 시스템 시간, `avg_confidence` = 미사용 방침이라 0
+  - 같은 image_id로 다시 저장하면 기존 행을 덮어씁니다 (중복 누적 없음)
+- 모델 라벨과 `equipment.class_name`은 직접 매치됩니다 (표기 통일 완료: BMP2, BRDM_2, BTR_60, BTR70, T62, T72, ZSU_23_4). equipment에 없는 라벨(직접 추가한 박스 등)은 경고 후 저장에서 제외됩니다.
+- 파일명이 image_id 형식이 아니거나 DB에 없는 이미지면, 탐지는 정상 동작하고 DB 표시·저장만 생략됩니다.
 
 ## 테스트
 

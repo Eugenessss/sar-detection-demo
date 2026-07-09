@@ -9,6 +9,7 @@
   3) 페이지 진입점 : 좌우 레이아웃을 만들고 실행 흐름을 연결
 """
 import re
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -17,7 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 
-from features.sar import service
+from features.sar import repository, service
 from features.sar.loader import load_sar_models
 from shared.viz import draw_boxes
 
@@ -118,6 +119,111 @@ def render_run_summary(result: service.SarInferenceResult) -> None:
     if result.azimuth is not None:
         parts.append(f"방위각 {result.azimuth}도")
     st.success(" | ".join(parts))
+
+
+# =====================================================================
+# 2-1) DB 연동 (satellite_intel)
+# =====================================================================
+
+def _parse_image_id(filename: Optional[str]) -> Optional[int]:
+    """파일명(예: 8192.tif)에서 image_id를 뽑는다. 숫자 형식이 아니면 None."""
+    if not filename:
+        return None
+    stem = Path(filename).stem
+    return int(stem) if stem.isdigit() else None
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_db_context(image_id: int) -> Dict[str, Any]:
+    """이미지 정보와 equipment 사전을 한 번에 조회한다 (실패해도 화면이 죽지 않게 error로 전달)."""
+    try:
+        return {
+            "info": repository.fetch_image_info(image_id),
+            "equipment": repository.fetch_equipment_ids(),
+            "error": None,
+        }
+    except Exception as exc:
+        return {"info": None, "equipment": {}, "error": str(exc)}
+
+
+def render_image_info_card(image_id: Optional[int], db_ctx: Dict[str, Any]) -> None:
+    """투입 이미지의 DB 정보(자산·지역·센서·촬영시각)를 보여준다."""
+    with st.container(border=True):
+        st.subheader("투입 이미지 정보")
+        if image_id is None:
+            st.info("파일명이 image_id 형식이 아니어서 DB와 연동되지 않습니다. (예: 8192.tif)")
+            return
+        if db_ctx["error"]:
+            st.warning(f"DB 연결 실패: {db_ctx['error']}")
+            return
+        info = db_ctx["info"]
+        if info is None:
+            st.info(f"image_analysis에 image_id={image_id} 이미지가 없습니다.")
+            return
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "image_id": image_id,
+                        "자산": info["asset_name"],
+                        "지역": info["region_name"],
+                        "센서": info["sensor_type"],
+                        "촬영시각": info["captured_time"],
+                    }
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+
+def render_db_save_section(
+    result: service.SarInferenceResult,
+    image_id: Optional[int],
+    db_ctx: Dict[str, Any],
+) -> None:
+    """detection_result에 저장될 집계를 미리 보여주고, 버튼을 누르면 저장한다."""
+    with st.container(border=True):
+        st.subheader("DB 저장 (detection_result)")
+
+        if image_id is None or db_ctx["error"] or db_ctx["info"] is None:
+            st.caption("DB(image_analysis)에 등록된 이미지만 저장할 수 있습니다.")
+            return
+
+        # 최종 검출목록(편집 반영된 상태)을 클래스별 개수로 집계한다.
+        counts = Counter(str(det["label"]) for det in result.detections)
+        equipment = db_ctx["equipment"]
+        matched = {label: cnt for label, cnt in counts.items() if label in equipment}
+        skipped = sorted(set(counts) - set(matched))
+
+        if matched:
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {"클래스": label, "equipment_id": equipment[label], "수량": cnt}
+                        for label, cnt in sorted(matched.items())
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.info("저장할 탐지 결과가 없습니다.")
+        if skipped:
+            st.warning(f"equipment에 없는 라벨은 저장에서 제외됩니다: {', '.join(skipped)}")
+
+        if st.button("DB 저장", use_container_width=True, disabled=not matched, key="sar_db_save"):
+            created_at = datetime.now()   # 버튼을 누른 시스템 시간을 created_at으로 기록
+            rows = [(equipment[label], cnt) for label, cnt in sorted(matched.items())]
+            try:
+                saved = repository.save_detection_results(image_id, rows, created_at)
+            except Exception as exc:
+                st.error(f"DB 저장 실패: {exc}")
+            else:
+                st.success(
+                    f"저장 완료: image_id={image_id}, {saved}개 클래스 "
+                    f"({created_at:%Y-%m-%d %H:%M:%S})"
+                )
 
 
 def render_detection_table(rows: List[Dict]) -> List[int]:
@@ -445,10 +551,18 @@ def render_sar_page() -> None:
             st.warning(error_message)
         if result is not None:
             render_run_summary(result)
+            image_id = _parse_image_id(result.filename)
+            db_ctx = (
+                _load_db_context(image_id)
+                if image_id is not None
+                else {"info": None, "equipment": {}, "error": None}
+            )
+            render_image_info_card(image_id, db_ctx)
             flash_message = st.session_state.pop(_SESSION_FLASH_KEY, None)
             if flash_message:
                 st.success(flash_message)
             selected_indices = render_detection_table(result.detections)
+            render_db_save_section(result, image_id, db_ctx)
 
     with right_col:
         render_result_panel(result, selected_indices)
