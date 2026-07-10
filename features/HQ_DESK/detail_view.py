@@ -20,7 +20,7 @@ from typing import Optional
 import streamlit as st
 from streamlit_folium import st_folium
 
-import service  # features/HQ_DESK/service.py
+from features.HQ_DESK import service
 
 
 def _render_enemy_asset_card(alert: service.Alert) -> None:

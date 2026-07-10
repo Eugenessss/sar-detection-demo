@@ -5,7 +5,7 @@
 ## 파일 구성
 
 - `features/HQ_DESK/service.py` — DB 조회 · EO 지도 생성 등 로직 모음 (지도/상세 화면 공용)
-- `features/HQ_DESK/view.py` — 한반도 위성 지도 화면 (독립 실행 진입점, 상단 메뉴에는 노출 안 됨)
+- `features/HQ_DESK/view.py` — 한반도 위성 지도 화면. `render_hq_desk_page()`가 진입점이며 `app.py`의 상단 메뉴("HQ Desk")에 연결되어 있음
 - `features/HQ_DESK/detail_view.py` — 마커 클릭 시 나오는 경보 상세 화면
 
 ## 1. 지도 화면 (view.py)
@@ -13,9 +13,9 @@
 - Google Earth Engine(Sentinel-2 true color) 배경 위에, DB `alert` 테이블에서 조회한 **가장 최신 경보 1건**만 마커로 표시.
 - 마커 색상은 경보수준(`alert_level`)에 따라 다름: 🔴 긴급(URGENT) · 🟠 중요(IMPORTANT) · 🔵 특이(NOTICE).
 - 마커에는 툴팁만 있고 팝업(클릭 시 텍스트박스)은 없음.
-- 마커를 클릭하면 `st.session_state["view"] = "detail"`로 전환되어 상세 화면으로 이동. 상단 내비게이션 메뉴에는 노출되지 않는 "숨겨진" 페이지.
+- 마커를 클릭하면 `st.session_state["view"] = "detail"`로 전환되어 상세 화면으로 이동. `app.py` 메뉴에는 지도 화면("HQ Desk")만 노출되고, 상세 화면은 같은 페이지 안에서 세션 상태로만 전환되는 "숨겨진" 화면.
 - 상세 화면에서 "← 지도로 돌아가기"를 누르면 지도 컴포넌트의 `key`를 바꿔(`_map_reset_token` 증가) 다시 그리므로, 같은 마커를 재클릭해도 정상적으로 상세 화면 전환이 동작함 (이전엔 좌표 기반 dedup 로직 때문에 재클릭이 씹히는 버그가 있었음 → 수정).
-- `st.set_page_config(layout="wide")`, 지도 `use_container_width=True`로 폭 전체 사용.
+- 지도 `use_container_width=True`로 폭 전체 사용 (레이아웃은 `app.py`가 전역으로 `layout="wide"` 설정).
 
 ## 2. 경보 상세 화면 (detail_view.py)
 
