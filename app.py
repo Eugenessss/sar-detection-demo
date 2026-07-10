@@ -16,7 +16,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from features.alerts.view import render_alerts_page
 from features.db.view import render_db_page
 from features.eo.view import render_eo_page
+<<<<<<< HEAD
 from features.HQ_DESK.view import render_hq_desk_page
+=======
+from features.eosar.view import render_eosar_page
+>>>>>>> 7299576954e5c78ef0d940f79023271d59684403
 from features.sar.view import render_sar_page
 from features.statistics.view import render_statistics_page
 from home import render_home_page
@@ -30,6 +34,7 @@ pages = [
     st.Page(render_home_page, title="Home", url_path="home", default=True),
     st.Page(render_sar_page, title="SAR", url_path="sar"),
     st.Page(render_eo_page, title="EO", url_path="eo"),
+    st.Page(render_eosar_page, title="EO/SAR", url_path="eosar"),
     st.Page(render_db_page, title="DB", url_path="db"),
     st.Page(render_alerts_page, title="Alerts", url_path="alerts"),
     st.Page(render_statistics_page, title="Statistics", url_path="statistics"),
