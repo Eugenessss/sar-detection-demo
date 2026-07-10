@@ -1,12 +1,12 @@
-# 경보 상세 화면 (features/4) 작업 정리
+# 경보 상세 화면 (features/HQ_DESK) 작업 정리
 
 청출어람 프로젝트의 "한반도 EO 위성 지도 → 경보 상세" 기능 구현 내역 정리.
 
 ## 파일 구성
 
-- `features/4/service.py` — DB 조회 · EO 지도 생성 등 로직 모음 (지도/상세 화면 공용)
-- `features/4/view.py` — 한반도 위성 지도 화면 (독립 실행 진입점, 상단 메뉴에는 노출 안 됨)
-- `features/4/detail_view.py` — 마커 클릭 시 나오는 경보 상세 화면
+- `features/HQ_DESK/service.py` — DB 조회 · EO 지도 생성 등 로직 모음 (지도/상세 화면 공용)
+- `features/HQ_DESK/view.py` — 한반도 위성 지도 화면 (독립 실행 진입점, 상단 메뉴에는 노출 안 됨)
+- `features/HQ_DESK/detail_view.py` — 마커 클릭 시 나오는 경보 상세 화면
 
 ## 1. 지도 화면 (view.py)
 
