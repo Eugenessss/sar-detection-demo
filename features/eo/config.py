@@ -15,4 +15,4 @@ DET_WEIGHT = ARTIFACT_DIR / "checkpoints" / "best.pt"   # EO 탐지기(YOLO) 가
 
 # --- detection hyperparameters (탐지 관련 숫자값) ---
 DET_CONF  = 0.25   # 이 확신도(25%) 미만의 탐지는 버린다
-DET_IMGSZ = 2400    # 학습할 때와 동일한 입력 크기 (반드시 맞춰야 함)
+DET_IMGSZ = 2048    # 학습할 때와 동일한 입력 크기 (반드시 맞춰야 함)
