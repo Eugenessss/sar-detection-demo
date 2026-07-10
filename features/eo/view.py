@@ -30,6 +30,35 @@ _SESSION_RESULT_KEY = "eo_last_result"
 _SESSION_UPLOAD_NAME_KEY = "eo_last_upload_name"
 _SESSION_FILE_BYTES_KEY = "eo_last_file_bytes"     # 원본 저장용으로 업로드 바이트를 보관
 _SESSION_SAVED_KEY = "eo_last_saved"               # {파일명: image_id} 중복 저장 안내용
+_SESSION_FLASH_KEY = "eo_flash_message"            # 수정/삭제/추가 후 rerun에서 보여줄 안내
+
+# 새 박스 추가 시 고를 수 있는 라벨 목록 (EO 모델 클래스 = equipment 테이블의 class_name과 일치).
+_EO_LABELS = [
+    "SMV",
+    "LMV",
+    "AFV",
+    "MCV",
+    "SU-35",
+    "B-1B",
+    "TU-22",
+    "F-15",
+    "KC-135",
+    "F-22",
+    "FA-18",
+    "TU-95",
+    "KC-10",
+    "SU-34",
+    "C-130",
+    "SU-24",
+    "C-17",
+    "C-5",
+    "F-16",
+    "TU-160",
+    "B-52",
+    "P-3C",
+    "Airplane",
+    "Helicopter",
+]
 
 _DB = "satellite_intel"
 
@@ -308,39 +337,210 @@ def render_db_save_section(result: service.EoInferenceResult, meta: Optional[Dic
 
 
 # =====================================================================
-# 4) 결과 표시
+# 4) 결과 표시 — 검출 목록은 sar/view.py와 동일하게 선택/수정/삭제/추가를 지원한다
 # =====================================================================
 
-def render_detection_table(rows: List[Dict]) -> None:
-    """탐지된 표적 목록을 표(클래스·신뢰도)로 보여준다. 없으면 안내 문구."""
-    if not rows:
-        st.info("탐지된 표적이 없습니다.")
+def render_detection_table(rows: List[Dict]) -> List[int]:
+    """탐지된 표적 목록을 보여주고, 선택된 행의 라벨/박스 편집 UI를 제공한다."""
+    with st.container(border=True):
+        st.subheader(f"검출 목록 ({len(rows)}개)")
+        selected_indices: List[int] = []
+
+        if rows:
+            dataframe = pd.DataFrame(
+                [
+                    {
+                        "label": item["label"],
+                        "x1": item["bbox"][0],
+                        "y1": item["bbox"][1],
+                        "x2": item["bbox"][2],
+                        "y2": item["bbox"][3],
+                    }
+                    for item in rows
+                ]
+            )
+            event = st.dataframe(
+                dataframe,
+                use_container_width=True,
+                hide_index=True,
+                height=210,
+                key="eo_detection_table",
+                on_select="rerun",
+                selection_mode="single-row",
+                column_config={
+                    "label": st.column_config.TextColumn("label"),
+                    "x1": st.column_config.NumberColumn("x1", format="%.1f"),
+                    "y1": st.column_config.NumberColumn("y1", format="%.1f"),
+                    "x2": st.column_config.NumberColumn("x2", format="%.1f"),
+                    "y2": st.column_config.NumberColumn("y2", format="%.1f"),
+                },
+            )
+
+            selection = getattr(event, "selection", {})
+            if isinstance(selection, dict):
+                selected_rows = list(selection.get("rows", []))
+            else:
+                selected_rows = list(getattr(selection, "rows", []))
+            if selected_rows:
+                selected_idx = selected_rows[0]
+                if 0 <= selected_idx < len(rows):
+                    selected = rows[selected_idx]
+                    st.caption(f"선택됨: {selected['label']} #{selected_idx + 1}")
+                    _render_detection_editor(rows, selected_idx)
+                    selected_indices = [selected_idx]
+            else:
+                st.caption("행을 클릭하면 해당 박스만 표시되고, 라벨과 bbox를 수정/삭제할 수 있습니다.")
+        else:
+            st.info("탐지된 표적이 없습니다. 필요한 경우 새 박스를 직접 추가할 수 있습니다.")
+
+        _render_add_detection_form(rows)
+        return selected_indices
+
+
+def _render_detection_editor(rows: List[Dict], selected_idx: int) -> None:
+    """선택한 detection의 label/bbox를 수정하는 작은 폼을 그린다."""
+    selected = rows[selected_idx]
+    x1, y1, x2, y2 = [float(value) for value in selected["bbox"]]
+
+    with st.form(key=f"eo_detection_editor_{selected_idx}"):
+        edited_label = st.text_input(
+            "label",
+            value=str(selected["label"]),
+            key=f"eo_detection_label_{selected_idx}",
+        )
+        coord_cols = st.columns(4)
+        with coord_cols[0]:
+            edited_x1 = st.number_input(
+                "x1",
+                value=x1,
+                step=1.0,
+                format="%.1f",
+                key=f"eo_detection_x1_{selected_idx}",
+            )
+        with coord_cols[1]:
+            edited_y1 = st.number_input(
+                "y1",
+                value=y1,
+                step=1.0,
+                format="%.1f",
+                key=f"eo_detection_y1_{selected_idx}",
+            )
+        with coord_cols[2]:
+            edited_x2 = st.number_input(
+                "x2",
+                value=x2,
+                step=1.0,
+                format="%.1f",
+                key=f"eo_detection_x2_{selected_idx}",
+            )
+        with coord_cols[3]:
+            edited_y2 = st.number_input(
+                "y2",
+                value=y2,
+                step=1.0,
+                format="%.1f",
+                key=f"eo_detection_y2_{selected_idx}",
+            )
+
+        action_cols = st.columns(2)
+        with action_cols[0]:
+            submitted = st.form_submit_button("수정 적용", use_container_width=True)
+        with action_cols[1]:
+            delete_clicked = st.form_submit_button("선택 행 삭제", use_container_width=True)
+
+    if delete_clicked:
+        deleted_label = str(rows[selected_idx]["label"])
+        del rows[selected_idx]
+        _update_saved_detections(rows)
+        st.session_state[_SESSION_FLASH_KEY] = f"'{deleted_label}' 행을 삭제했습니다."
+        st.rerun()
+
+    if not submitted:
         return
 
-    st.subheader(f"검출 목록 ({len(rows)}개)")
-    dataframe = pd.DataFrame(
-        [
-            {
-                "label": item["label"],
-                "conf": round(item["conf"], 3),
-            }
-            for item in rows
-        ]
+    normalized_box = _normalize_bbox([edited_x1, edited_y1, edited_x2, edited_y2])
+    rows[selected_idx]["label"] = edited_label.strip() or str(selected["label"])
+    rows[selected_idx]["bbox"] = normalized_box
+    _update_saved_detections(rows)
+    st.session_state[_SESSION_FLASH_KEY] = "수정 내용을 탐지 결과 이미지에 반영했습니다."
+    st.rerun()
+
+
+def _render_add_detection_form(rows: List[Dict]) -> None:
+    """사용자가 새 detection 행을 추가하는 폼을 그린다 (미탐 객체를 직접 박스 치는 용도)."""
+    with st.expander("새 박스 추가", expanded=not rows):
+        with st.form("eo_add_detection_form"):
+            new_label = st.selectbox("label", options=_EO_LABELS)
+            coord_cols = st.columns(4)
+            with coord_cols[0]:
+                new_x1 = st.number_input("x1", value=0.0, step=1.0, format="%.1f")
+            with coord_cols[1]:
+                new_y1 = st.number_input("y1", value=0.0, step=1.0, format="%.1f")
+            with coord_cols[2]:
+                new_x2 = st.number_input("x2", value=64.0, step=1.0, format="%.1f")
+            with coord_cols[3]:
+                new_y2 = st.number_input("y2", value=64.0, step=1.0, format="%.1f")
+
+            submitted = st.form_submit_button("행 추가", use_container_width=True)
+
+    if not submitted:
+        return
+
+    rows.append(
+        {
+            "label": new_label,
+            "bbox": _normalize_bbox([new_x1, new_y1, new_x2, new_y2]),
+            "conf": None,
+        }
     )
-    st.dataframe(dataframe, use_container_width=True, hide_index=True)
+    _update_saved_detections(rows)
+    st.session_state[_SESSION_FLASH_KEY] = "새 박스를 추가했습니다."
+    st.rerun()
+
+
+def _normalize_bbox(box: List[float]) -> List[float]:
+    """좌표 순서가 뒤집혀 입력돼도 [x1, y1, x2, y2] 순서로 맞춘다."""
+    x1, y1, x2, y2 = [float(value) for value in box]
+    return [min(x1, x2), min(y1, y2), max(x1, x2), max(y1, y2)]
+
+
+def _update_saved_detections(rows: List[Dict]) -> None:
+    """session_state에 저장된 마지막 결과의 detections를 갱신한다."""
+    saved_result = st.session_state.get(_SESSION_RESULT_KEY)
+    if saved_result is not None:
+        saved_result.detections = rows
+        st.session_state[_SESSION_RESULT_KEY] = saved_result
+
+
+def _detections_for_selection(detections: List[Dict], selected_indices: List[int]) -> List[Dict]:
+    """선택된 행이 있으면 해당 detection만, 없으면 전체 detection을 돌려준다."""
+    selected = [
+        detections[index]
+        for index in selected_indices
+        if 0 <= index < len(detections)
+    ]
+    return selected or detections
 
 
 def render_eo_result(result: service.EoInferenceResult) -> None:
-    """추론 결과를 요약 줄 → (왼쪽) 박스 그린 이미지 · (오른쪽) 검출 표로 그린다."""
+    """추론 결과를 요약 줄 → (왼쪽) 박스 그린 이미지 · (오른쪽) 편집 가능한 검출 목록으로 그린다."""
     st.success(f"완료 {result.elapsed_sec}s | 탐지 {len(result.detections)}개")
 
-    # 왼쪽: 탐지 이미지, 오른쪽: 검출 결과 표
+    flash_message = st.session_state.pop(_SESSION_FLASH_KEY, None)
+    if flash_message:
+        st.success(flash_message)
+
+    # 왼쪽: 탐지 이미지, 오른쪽: 검출 목록.
+    # 표에서 선택한 행을 이미지에 반영해야 하므로 표(오른쪽)를 먼저 그린다.
     image_col, table_col = st.columns([2, 1])
+    with table_col:
+        selected_indices = render_detection_table(result.detections)
     with image_col:
         st.subheader("탐지 결과")
-        st.image(draw_boxes(result.scene, result.detections), use_container_width=True)
-    with table_col:
-        render_detection_table(result.detections)
+        selected_detections = _detections_for_selection(result.detections, selected_indices)
+        st.image(draw_boxes(result.scene, selected_detections), use_container_width=True)
+        if selected_indices:
+            st.caption("선택한 행의 박스만 표시 중입니다. 표 선택을 해제하면 전체 박스가 표시됩니다.")
 
 
 # =====================================================================
