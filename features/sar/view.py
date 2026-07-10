@@ -3,9 +3,17 @@
 사용자가 실제로 보는 SAR 추론 페이지.
 좌측에는 입력·요약·검출 목록을 두고, 우측에는 박스가 그려진 탐지 결과 이미지를 보여준다.
 
+DB 연동(satellite_intel)은 EO 페이지와 같은 방식이다:
+  - 파일명 자체가 메타데이터다. "자산명_지역명_지역ID_센서_YYYY-MM-DD HHMMSS.tif" 형식
+    (예: 425-1_개풍군_1_SAR_2026-07-09 100000.tif, 파일명에 ':'를 못 쓰므로 시각은 붙여 쓴다)
+  - 저장 버튼 하나로 image_analysis(새 행, image_id는 DB가 자동 증가로 부여)와
+    detection_result(최종 편집 반영된 클래스별 집계, avg_confidence는 미사용 방침이라 0)를
+    한 번에 저장하고, 원본 이미지는 original_image/, 결과 이미지는 result_image/에 저장한다.
+  - SQL 자체는 repository.py에 있다 (이 파일은 화면만 담당).
+
 읽는 순서(위→아래):
   1) 입력 컨트롤   : 회전 설정·파일 업로드·모델 상태·실행 버튼
-  2) 결과 표시     : 요약 배너·검출 목록·탐지 이미지
+  2) 결과 표시     : 요약 배너·검출 목록·탐지 이미지·DB 저장
   3) 페이지 진입점 : 좌우 레이아웃을 만들고 실행 흐름을 연결
 """
 import re
@@ -24,9 +32,13 @@ from shared.viz import draw_boxes
 
 _SESSION_RESULT_KEY = "sar_last_result"
 _SESSION_UPLOAD_NAME_KEY = "sar_last_upload_name"
+_SESSION_FILE_BYTES_KEY = "sar_last_file_bytes"    # 원본 저장용으로 업로드 바이트를 보관
+_SESSION_SAVED_KEY = "sar_last_saved"              # {파일명: image_id} 중복 저장 안내용
 _SESSION_FLASH_KEY = "sar_flash_message"
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _OUTPUT_ROOT = _PROJECT_ROOT / "outputs" / "sar"
+_ORIGINAL_DIR = _PROJECT_ROOT / "original_image"   # 원본 이미지 저장 폴더
+_RESULT_DIR = _PROJECT_ROOT / "result_image"       # 박스 그려진 결과 이미지 저장 폴더
 
 
 # =====================================================================
@@ -122,53 +134,113 @@ def render_run_summary(result: service.SarInferenceResult) -> None:
 
 
 # =====================================================================
-# 2-1) DB 연동 (satellite_intel)
+# 2-1) DB 연동 (satellite_intel) — EO 페이지와 같은 방식
 # =====================================================================
 
-def _parse_image_id(filename: Optional[str]) -> Optional[int]:
-    """파일명(예: 8192.tif)에서 image_id를 뽑는다. 숫자 형식이 아니면 None."""
+def _parse_image_meta(filename: Optional[str]) -> Optional[Dict[str, Any]]:
+    """파일명에서 image_analysis에 저장할 메타데이터를 뽑는다.
+
+    형식: "자산명_지역명_지역ID_센서_YYYY-MM-DD HHMMSS.확장자"
+    (예: 425-1_개풍군_1_SAR_2026-07-09 100000.tif)
+    형식이 다르면 None을 돌려준다 (DB 저장 없이 탐지 기능만 사용 가능).
+    """
     if not filename:
         return None
-    stem = Path(filename).stem
-    return int(stem) if stem.isdigit() else None
+    parts = Path(filename).stem.split("_")
+    if len(parts) != 5:
+        return None
+
+    asset_name, region_name, region_id_raw, sensor_raw, time_raw = parts
+    if not region_id_raw.isdigit():
+        return None
+    sensor_type = sensor_raw.upper()
+    if sensor_type not in ("EO", "SAR"):
+        return None
+    try:
+        # 파일명에는 ':'를 쓸 수 없어 시각을 붙여 쓴다 (100000 → 10:00:00).
+        captured_time = datetime.strptime(time_raw, "%Y-%m-%d %H%M%S")
+    except ValueError:
+        return None
+
+    return {
+        "asset_name": asset_name,
+        "region_name": region_name,
+        "region_id": int(region_id_raw),
+        "sensor_type": sensor_type,
+        "captured_time": captured_time,
+    }
+
+
+def _image_paths_for(filename: str) -> Tuple[str, str]:
+    """원본/결과 이미지가 저장될 경로(DB에 기록할 프로젝트 기준 상대경로)를 만든다."""
+    original_rel = f"original_image/{filename}"
+    result_rel = f"result_image/{Path(filename).stem}.png"
+    return original_rel, result_rel
 
 
 @st.cache_data(ttl=60, show_spinner=False)
-def _load_db_context(image_id: int) -> Dict[str, Any]:
-    """이미지 정보와 equipment 사전을 한 번에 조회한다 (실패해도 화면이 죽지 않게 error로 전달)."""
+def _load_equipment_ids() -> Dict[str, Any]:
+    """equipment 사전 {class_name: equipment_id}를 조회한다 (실패해도 화면이 죽지 않게 error로 전달)."""
     try:
-        return {
-            "info": repository.fetch_image_info(image_id),
-            "equipment": repository.fetch_equipment_ids(),
-            "error": None,
-        }
+        return {"equipment": repository.fetch_equipment_ids(), "error": None}
     except Exception as exc:
-        return {"info": None, "equipment": {}, "error": str(exc)}
+        return {"equipment": {}, "error": str(exc)}
 
 
-def render_image_info_card(image_id: Optional[int], db_ctx: Dict[str, Any]) -> None:
-    """투입 이미지의 DB 정보(자산·지역·센서·촬영시각)를 보여준다."""
+def _save_image_files(
+    result: service.SarInferenceResult,
+    file_bytes: Optional[bytes],
+    original_rel: str,
+    result_rel: str,
+) -> None:
+    """원본 이미지는 original_image/, 박스가 그려진 결과 이미지는 result_image/에 저장한다."""
+    _ORIGINAL_DIR.mkdir(parents=True, exist_ok=True)
+    _RESULT_DIR.mkdir(parents=True, exist_ok=True)
+
+    if file_bytes:
+        (_PROJECT_ROOT / original_rel).write_bytes(file_bytes)
+
+    # 편집 반영된 최종 검출목록 기준으로 박스를 그린다.
+    annotated = draw_boxes(result.scene, result.detections)
+    annotated.save(_PROJECT_ROOT / result_rel)
+
+
+def render_db_save_section(
+    result: service.SarInferenceResult,
+    meta: Optional[Dict[str, Any]],
+) -> None:
+    """image_analysis·detection_result에 저장될 내용을 미리 보여주고, 버튼 하나로 함께 저장한다."""
     with st.container(border=True):
-        st.subheader("투입 이미지 정보")
-        if image_id is None:
-            st.info("파일명이 image_id 형식이 아니어서 DB와 연동되지 않습니다. (예: 8192.tif)")
+        st.subheader("DB 저장 (image_analysis + detection_result)")
+
+        if meta is None:
+            st.info(
+                "파일명이 저장 형식이 아니어서 DB 저장은 할 수 없습니다. "
+                "형식: 자산명_지역명_지역ID_센서_YYYY-MM-DD HHMMSS "
+                "(예: 425-1_개풍군_1_SAR_2026-07-09 100000.tif)"
+            )
             return
-        if db_ctx["error"]:
-            st.warning(f"DB 연결 실패: {db_ctx['error']}")
+
+        equipment_ctx = _load_equipment_ids()
+        if equipment_ctx["error"]:
+            st.warning(f"DB 연결 실패: {equipment_ctx['error']}")
             return
-        info = db_ctx["info"]
-        if info is None:
-            st.info(f"image_analysis에 image_id={image_id} 이미지가 없습니다.")
-            return
+
+        original_rel, result_rel = _image_paths_for(result.filename)
+
+        # 1) image_analysis에 저장될 내용 미리보기 (image_id는 DB가 자동 부여하므로 표시하지 않음).
+        st.caption("image_analysis에 저장될 내용")
         st.dataframe(
             pd.DataFrame(
                 [
                     {
-                        "image_id": image_id,
-                        "자산": info["asset_name"],
-                        "지역": info["region_name"],
-                        "센서": info["sensor_type"],
-                        "촬영시각": info["captured_time"],
+                        "자산": meta["asset_name"],
+                        "지역": meta["region_name"],
+                        "region_id": meta["region_id"],
+                        "센서": meta["sensor_type"],
+                        "촬영시각": meta["captured_time"],
+                        "original_image_path": original_rel,
+                        "result_image_path": result_rel,
                     }
                 ]
             ),
@@ -176,26 +248,13 @@ def render_image_info_card(image_id: Optional[int], db_ctx: Dict[str, Any]) -> N
             hide_index=True,
         )
 
-
-def render_db_save_section(
-    result: service.SarInferenceResult,
-    image_id: Optional[int],
-    db_ctx: Dict[str, Any],
-) -> None:
-    """detection_result에 저장될 집계를 미리 보여주고, 버튼을 누르면 저장한다."""
-    with st.container(border=True):
-        st.subheader("DB 저장 (detection_result)")
-
-        if image_id is None or db_ctx["error"] or db_ctx["info"] is None:
-            st.caption("DB(image_analysis)에 등록된 이미지만 저장할 수 있습니다.")
-            return
-
-        # 최종 검출목록(편집 반영된 상태)을 클래스별 개수로 집계한다.
+        # 2) detection_result에 저장될 집계 미리보기 — 최종 검출목록(편집 반영) 기준.
         counts = Counter(str(det["label"]) for det in result.detections)
-        equipment = db_ctx["equipment"]
+        equipment = equipment_ctx["equipment"]
         matched = {label: cnt for label, cnt in counts.items() if label in equipment}
         skipped = sorted(set(counts) - set(matched))
 
+        st.caption("detection_result에 저장될 내용")
         if matched:
             st.dataframe(
                 pd.DataFrame(
@@ -208,20 +267,41 @@ def render_db_save_section(
                 hide_index=True,
             )
         else:
-            st.info("저장할 탐지 결과가 없습니다.")
+            st.info("저장할 탐지 결과가 없습니다 (image_analysis만 저장됩니다).")
         if skipped:
             st.warning(f"equipment에 없는 라벨은 저장에서 제외됩니다: {', '.join(skipped)}")
 
-        if st.button("DB 저장", use_container_width=True, disabled=not matched, key="sar_db_save"):
+        # 같은 파일을 이미 저장했다면 안내한다 (버튼을 다시 누르면 새 image_id로 추가 저장됨).
+        saved_map = st.session_state.get(_SESSION_SAVED_KEY, {})
+        if result.filename in saved_map:
+            st.caption(
+                f"이미 저장된 파일입니다 (image_id={saved_map[result.filename]}). "
+                "다시 저장하면 새 image_id로 한 행 더 추가됩니다."
+            )
+
+        # 3) 저장 버튼 하나로 이미지 파일 2개 + 두 테이블을 함께 저장한다.
+        if st.button("DB 저장", use_container_width=True, key="sar_db_save"):
             created_at = datetime.now()   # 버튼을 누른 시스템 시간을 created_at으로 기록
             rows = [(equipment[label], cnt) for label, cnt in sorted(matched.items())]
             try:
-                saved = repository.save_detection_results(image_id, rows, created_at)
+                _save_image_files(
+                    result,
+                    st.session_state.get(_SESSION_FILE_BYTES_KEY),
+                    original_rel,
+                    result_rel,
+                )
+                image_id = repository.save_analysis_and_detections(
+                    meta, original_rel, result_rel, rows, created_at
+                )
             except Exception as exc:
                 st.error(f"DB 저장 실패: {exc}")
             else:
+                saved_map[result.filename] = image_id
+                st.session_state[_SESSION_SAVED_KEY] = saved_map
                 st.success(
-                    f"저장 완료: image_id={image_id}, {saved}개 클래스 "
+                    f"저장 완료: image_id={image_id} (자동 부여), "
+                    f"detection_result {len(rows)}개 클래스, "
+                    f"원본 → {original_rel}, 결과 → {result_rel} "
                     f"({created_at:%Y-%m-%d %H:%M:%S})"
                 )
 
@@ -495,15 +575,21 @@ def _clear_saved_result() -> None:
     for key in [
         _SESSION_RESULT_KEY,
         _SESSION_UPLOAD_NAME_KEY,
+        _SESSION_FILE_BYTES_KEY,
         _SESSION_FLASH_KEY,
     ]:
         st.session_state.pop(key, None)
 
 
-def _save_result(result: service.SarInferenceResult, upload_name: Optional[str]) -> None:
-    """행 선택 rerun 이후에도 쓸 수 있게 마지막 추론 결과를 저장한다."""
+def _save_result(
+    result: service.SarInferenceResult,
+    upload_name: Optional[str],
+    file_bytes: bytes,
+) -> None:
+    """행 선택·DB 저장 등 rerun 이후에도 쓸 수 있게 마지막 추론 결과·원본 바이트를 저장한다."""
     st.session_state[_SESSION_RESULT_KEY] = result
     st.session_state[_SESSION_UPLOAD_NAME_KEY] = upload_name
+    st.session_state[_SESSION_FILE_BYTES_KEY] = file_bytes
 
 
 def _sync_saved_result_with_upload(controls: InferenceControls) -> None:
@@ -541,7 +627,7 @@ def render_sar_page() -> None:
         if error_message:
             _clear_saved_result()
         elif result is not None:
-            _save_result(result, controls.tif_file.name)
+            _save_result(result, controls.tif_file.name, controls.tif_file.getvalue())
     else:
         _, error_message = run_inference_if_requested(controls)
 
@@ -551,18 +637,13 @@ def render_sar_page() -> None:
             st.warning(error_message)
         if result is not None:
             render_run_summary(result)
-            image_id = _parse_image_id(result.filename)
-            db_ctx = (
-                _load_db_context(image_id)
-                if image_id is not None
-                else {"info": None, "equipment": {}, "error": None}
-            )
-            render_image_info_card(image_id, db_ctx)
             flash_message = st.session_state.pop(_SESSION_FLASH_KEY, None)
             if flash_message:
                 st.success(flash_message)
             selected_indices = render_detection_table(result.detections)
-            render_db_save_section(result, image_id, db_ctx)
+            # 파일명에서 읽은 메타데이터로 두 테이블 + 이미지 파일을 한 번에 저장.
+            meta = _parse_image_meta(result.filename)
+            render_db_save_section(result, meta)
 
     with right_col:
         render_result_panel(result, selected_indices)

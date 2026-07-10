@@ -237,5 +237,5 @@ outputs/
 .claude
 
 # 이미지 파일 제거
-.original_image
-.result_image
+original_image/
+result_image/
