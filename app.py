@@ -18,6 +18,7 @@ from features.db.view import render_db_page
 from features.eo.view import render_eo_page
 from features.eosar.view import render_eosar_page
 from features.HQ_DESK.view import render_hq_desk_page
+from features.reports.view import render_reports_page
 from features.sar.view import render_sar_page
 from features.statistics.view import render_statistics_page
 from home import render_home_page
@@ -36,6 +37,7 @@ pages = [
     st.Page(render_alerts_page, title="Alerts", url_path="alerts"),
     st.Page(render_statistics_page, title="Statistics", url_path="statistics"),
     st.Page(render_hq_desk_page, title="HQ Desk", url_path="hq-desk"),
+    st.Page(render_reports_page, title="Reports", url_path="reports"),
     st.Page(render_blank_1_page, title="Blank 1", url_path="blank-1"),
 ]
 
