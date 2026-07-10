@@ -4,8 +4,8 @@
 (업로드 → 탐지 → 편집 가능한 검출 목록 → DB 저장) 하나로 통합했다.
 
 어떤 가중치로 탐지할지는 파일명이 정한다:
-  - 파일명 형식: "자산명_지역명_지역ID_센서_YYYY-MM-DD HHMMSS.확장자"
-    (예: 425-1_개풍군_1_EO_2023-12-30 220000.png / 425-1_개풍군_1_SAR_2026-07-09 100000.tif)
+  - 파일명 형식: "자산명_지역명_지역ID_센서_YYYY-MM-DD 시각.확장자"
+    (예: 425-1_개풍군_1_EO_2023-12-30 220000.png / 425-1_개풍군_1_SAR_2026-08-10 1000000.tif)
   - 센서 자리가 EO면 EO 탐지 가중치로, SAR이면 SAR 탐지+분류 파이프라인으로 실행하고,
     결과 표시도 각 센서의 기존 페이지와 같은 내용(요약·검출 목록·박스 이미지)으로 나온다.
 
@@ -14,7 +14,13 @@ DB 저장은 기존 페이지와 한 가지가 다르다:
     DB가 부여한 image_id로 쓴다 (예: original_image/8199.png, result_image/8199.png).
     image_id는 저장 시점에야 정해지므로, 행을 먼저 확보해 image_id를 받고 그 이름으로
     경로를 기록·파일을 저장한다. 전 과정이 한 트랜잭션이라 실패하면 DB도 롤백된다.
+
+화면 배치 (Streamlit 기본 위젯만 사용, HTML/CSS 없음):
+  - 왼쪽(넓게): 이미지 영역 — 실행 전에는 ARGOS 로고, 실행 후에는 박스가 그려진 탐지 이미지.
+  - 오른쪽: 입력(업로드·모델 상태·회전·실행) → 요약 → 검출 목록(편집) → DB 저장.
+    이미지가 커도 DB 저장 칸이 화면 밖으로 밀려나지 않도록 오른쪽 열에 모아두었다.
 """
+import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
@@ -32,7 +38,6 @@ from features.sar.loader import load_sar_models
 from shared.alert_ui import render_change_analysis_result
 from shared.change_analysis import analyze_image_change
 from shared.database import get_engine
-from shared.image_store import parse_image_meta
 from shared.viz import draw_boxes
 
 # EO/SAR 결과 객체를 함께 다루기 위한 타입 (필드 중 detections/elapsed_sec/filename/scene은 공통).
@@ -46,10 +51,12 @@ _SESSION_FLASH_KEY = "eosar_flash_message"         # 수정/삭제/추가 후 re
 
 _DB = "satellite_intel"
 
-# 이미지 파일이 저장될 폴더 (프로젝트 루트 기준).
+# 이미지 파일이 저장될 폴더 (프로젝트 루트 기준)와 페이지 자산(로고).
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _ORIGINAL_DIR = _PROJECT_ROOT / "original_image"
 _RESULT_DIR = _PROJECT_ROOT / "result_image"
+_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "argos_logo.png"          # placeholder용 원본
+_LOGO_SMALL_PATH = Path(__file__).resolve().parent / "assets" / "argos_logo_small.png"  # 헤더용 축소본
 
 # EO에서 새 박스 추가 시 고를 수 있는 라벨 목록 (EO 모델 클래스 = equipment의 class_name과 일치).
 _EO_LABELS = [
@@ -81,7 +88,88 @@ _EO_LABELS = [
 
 
 # =====================================================================
-# 1) 입력 컨트롤 — 파일명에서 센서를 읽어 그에 맞는 모델 상태를 보여준다
+# 0) 파일명 → 메타데이터 해석 (shared/image_store.py보다 시각 자리수에 유연한 통합판)
+# =====================================================================
+
+def _parse_captured_time(date_part: str, time_part: str) -> Optional[datetime]:
+    """날짜("YYYY-MM-DD")와 시각 숫자를 datetime으로 바꾼다.
+
+    파일명에는 ':'를 쓸 수 없어 시각을 숫자로 붙여 쓰는데, 자리수가 들쭉날쭉해도 받아준다:
+      4자리 "1000" → 10:00:00 / 6자리 "100000" → 10:00:00 / 7자리 이상 "1000000" → 앞 6자리만 사용.
+    """
+    digits = re.sub(r"\D", "", time_part)
+    if len(digits) == 4:        # HHMM
+        digits += "00"
+    elif len(digits) >= 6:      # HHMMSS (넘치는 뒷자리는 무시)
+        digits = digits[:6]
+    else:
+        return None
+    try:
+        return datetime.strptime(f"{date_part} {digits}", "%Y-%m-%d %H%M%S")
+    except ValueError:
+        return None
+
+
+def parse_image_meta(filename: Optional[str]) -> Optional[Dict[str, Any]]:
+    """파일명에서 image_analysis에 저장할 메타데이터를 뽑는다.
+
+    형식: "자산명_지역명_지역ID_센서_YYYY-MM-DD 시각.확장자"
+    (예: 425-1_개풍군_1_SAR_2026-08-10 1000000.tif — 시각 앞은 공백/밑줄 모두 허용)
+    형식이 다르면 None을 돌려준다 (센서를 알 수 없으므로 이 페이지에서는 실행 불가).
+    """
+    if not filename:
+        return None
+    parts = Path(filename).stem.split("_")
+    # "YYYY-MM-DD_100000"처럼 시각 앞을 밑줄로 쓴 경우 날짜와 시각을 도로 합쳐준다.
+    if len(parts) == 6 and re.fullmatch(r"\d{4,}", parts[5]):
+        parts = parts[:4] + [f"{parts[4]} {parts[5]}"]
+    if len(parts) != 5:
+        return None
+
+    asset_name, region_name, region_id_raw, sensor_raw, time_raw = parts
+    if not region_id_raw.isdigit():
+        return None
+    sensor_type = sensor_raw.upper()
+    if sensor_type not in ("EO", "SAR"):
+        return None
+
+    time_tokens = time_raw.split()
+    if len(time_tokens) != 2:
+        return None
+    captured_time = _parse_captured_time(time_tokens[0], time_tokens[1])
+    if captured_time is None:
+        return None
+
+    return {
+        "asset_name": asset_name,
+        "region_name": region_name,
+        "region_id": int(region_id_raw),
+        "sensor_type": sensor_type,
+        "captured_time": captured_time,
+    }
+
+
+# =====================================================================
+# 1) 헤더 — 로고 + 제목 (Streamlit 기본 위젯만 사용)
+# =====================================================================
+
+def _render_header() -> None:
+    """로고와 제목·설명을 페이지 상단에 그린다."""
+    logo_path = _LOGO_SMALL_PATH if _LOGO_SMALL_PATH.exists() else _LOGO_PATH
+    if logo_path.exists():
+        logo_col, title_col = st.columns([0.10, 0.90], vertical_alignment="center")
+        with logo_col:
+            st.image(str(logo_path), use_container_width=True)
+        with title_col:
+            st.title("EO/SAR 통합 표적 탐지")
+            st.caption("파일명의 센서 종류(EO/SAR)에 따라 알맞은 탐지 모델을 자동 선택합니다")
+    else:
+        st.title("EO/SAR 통합 표적 탐지")
+        st.caption("파일명의 센서 종류(EO/SAR)에 따라 알맞은 탐지 모델을 자동 선택합니다")
+
+
+# =====================================================================
+# 2) 입력 컨트롤 — 파일명에서 센서를 읽어 그에 맞는 모델 상태를 보여준다
 # =====================================================================
 
 @dataclass
@@ -94,24 +182,23 @@ class EosarControls:
 
 
 def render_controls() -> EosarControls:
-    """파일 업로드·모델 상태·(SAR일 때) 회전·실행 버튼을 그리고, 고른 값을 돌려준다."""
-    st.subheader("입력")
-    upload_col, action_col = st.columns([2.0, 1.0], vertical_alignment="bottom")
+    """입력 카드: 업로드·모델 상태·(SAR일 때) 회전·실행 버튼을 세로로 그린다."""
+    with st.container(border=True):
+        st.subheader("데이터 및 이미지 선택")
 
-    with upload_col:
         image_file = st.file_uploader(
-            "이미지 업로드 (TIF / PNG / JPG) — 파일명의 센서(EO/SAR)로 모델을 자동 선택",
+            "이미지 업로드 (TIF / PNG / JPG)",
             type=["tif", "tiff", "png", "jpg", "jpeg"],
         )
 
-    # 파일명에서 메타데이터(센서 포함)를 미리 읽는다. 실행 전에 어떤 모델을 쓸지 알 수 있다.
-    meta = parse_image_meta(image_file.name) if image_file is not None else None
+        # 파일명에서 메타데이터(센서 포함)를 미리 읽는다. 실행 전에 어떤 모델을 쓸지 알 수 있다.
+        meta = parse_image_meta(image_file.name) if image_file is not None else None
 
-    with action_col:
         if image_file is None:
-            st.caption("이미지를 올리면 파일명의 센서 종류에 맞는 모델을 확인합니다.")
+            st.caption("파일명의 센서 종류(EO/SAR)에 맞는 탐지 모델을 자동 선택합니다.")
         elif meta is None:
             st.error("파일명이 형식에 맞지 않아 센서(EO/SAR)를 알 수 없습니다.")
+            st.caption("형식: 자산명_지역명_지역ID_센서_YYYY-MM-DD 시각 (예: 425-1_개풍군_1_EO_2023-12-30 220000.png)")
         else:
             sensor = meta["sensor_type"]
             loader = load_eo_models if sensor == "EO" else load_sar_models
@@ -120,21 +207,20 @@ def render_controls() -> EosarControls:
                 st.success(f"{sensor} 모델 로드됨")
             else:
                 st.error(f"{sensor} 모델 미로드: {error or ''}")
+
+        # SAR일 때만 수동 회전 컨트롤을 노출한다 (파일명에 방위각이 있으면 자동 회전이 우선).
+        rotate_k = 0
+        if meta is not None and meta["sensor_type"] == "SAR":
+            with st.expander("수동 회전 (SAR 전용)", expanded=False):
+                manual_rot = st.select_slider(
+                    "회전 각도",
+                    options=[0, 90, 180, 270],
+                    value=0,
+                    format_func=lambda value: f"{value}도",
+                )
+                rotate_k = manual_rot // 90
+
         run_clicked = st.button("실행", type="primary", use_container_width=True)
-
-    # SAR일 때만 수동 회전 컨트롤을 노출한다 (파일명에 방위각이 있으면 자동 회전이 우선).
-    rotate_k = 0
-    if meta is not None and meta["sensor_type"] == "SAR":
-        with st.expander("수동 회전 (SAR 전용)", expanded=False):
-            manual_rot = st.select_slider(
-                "회전 각도",
-                options=[0, 90, 180, 270],
-                value=0,
-                format_func=lambda value: f"{value}도",
-            )
-            rotate_k = manual_rot // 90
-
-    st.divider()
 
     return EosarControls(
         image_file=image_file,
@@ -145,7 +231,7 @@ def render_controls() -> EosarControls:
 
 
 # =====================================================================
-# 2) DB 연동 (satellite_intel) — 파일 이름을 image_id로 저장하는 통합판
+# 3) DB 연동 (satellite_intel) — 파일 이름을 image_id로 저장하는 통합판
 # =====================================================================
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -290,12 +376,13 @@ def _save_all(
 def render_db_save_section(result: InferenceResult, meta: Optional[Dict[str, Any]]) -> None:
     """image_analysis·detection_result에 저장될 내용을 미리 보여주고, 버튼 하나로 함께 저장한다."""
     with st.container(border=True):
-        st.subheader("DB 저장 (image_analysis + detection_result)")
+        st.subheader("DB 저장")
+        st.caption("image_analysis + detection_result")
 
         if meta is None:
             st.info(
                 f"파일명 '{result.filename}'이 저장 형식이 아니어서 DB 저장은 할 수 없습니다. "
-                "형식: 자산명_지역명_지역ID_센서_YYYY-MM-DD HHMMSS "
+                "형식: 자산명_지역명_지역ID_센서_YYYY-MM-DD 시각 "
                 "(예: 425-1_개풍군_1_EO_2023-12-30 220000.png — 시각 앞은 공백/밑줄 모두 허용)"
             )
             return
@@ -320,24 +407,23 @@ def render_db_save_section(result: InferenceResult, meta: Optional[Dict[str, Any
             result_rel = "result_image/(자동 부여 image_id).png"
 
         # 1) image_analysis에 저장될 내용 미리보기 (image_id는 DB가 자동 부여하므로 표시하지 않음).
-        st.caption("image_analysis에 저장될 내용")
-        st.dataframe(
-            pd.DataFrame(
-                [
-                    {
-                        "자산": meta["asset_name"],
-                        "지역": meta["region_name"],
-                        "region_id": meta["region_id"],
-                        "센서": meta["sensor_type"],
-                        "촬영시각": meta["captured_time"],
-                        "original_image_path": original_rel,
-                        "result_image_path": result_rel,
-                    }
-                ]
-            ),
-            use_container_width=True,
-            hide_index=True,
-        )
+        #    오른쪽 열은 폭이 좁으므로 항목을 세로로 보여준다.
+        with st.expander("image_analysis에 저장될 내용", expanded=True):
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {"항목": "자산", "값": meta["asset_name"]},
+                        {"항목": "지역", "값": meta["region_name"]},
+                        {"항목": "region_id", "값": str(meta["region_id"])},
+                        {"항목": "센서", "값": meta["sensor_type"]},
+                        {"항목": "촬영시각", "값": str(meta["captured_time"])},
+                        {"항목": "original_image_path", "값": original_rel},
+                        {"항목": "result_image_path", "값": result_rel},
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
 
         # 2) detection_result에 저장될 집계 미리보기 — 최종 검출목록(편집 반영) 기준.
         counts = Counter(str(det["label"]) for det in result.detections)
@@ -345,22 +431,22 @@ def render_db_save_section(result: InferenceResult, meta: Optional[Dict[str, Any
         matched = {label: cnt for label, cnt in counts.items() if label in equipment}
         skipped = sorted(set(counts) - set(matched))
 
-        st.caption("detection_result에 저장될 내용")
-        if matched:
-            st.dataframe(
-                pd.DataFrame(
-                    [
-                        {"클래스": label, "equipment_id": equipment[label], "수량": cnt}
-                        for label, cnt in sorted(matched.items())
-                    ]
-                ),
-                use_container_width=True,
-                hide_index=True,
-            )
-        else:
-            st.info("저장할 탐지 결과가 없습니다 (image_analysis만 저장됩니다).")
-        if skipped:
-            st.warning(f"equipment에 없는 라벨은 저장에서 제외됩니다: {', '.join(skipped)}")
+        with st.expander("detection_result에 저장될 내용", expanded=True):
+            if matched:
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {"클래스": label, "equipment_id": equipment[label], "수량": cnt}
+                            for label, cnt in sorted(matched.items())
+                        ]
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("저장할 탐지 결과가 없습니다 (image_analysis만 저장됩니다).")
+            if skipped:
+                st.warning(f"equipment에 없는 라벨은 저장에서 제외됩니다: {', '.join(skipped)}")
 
         if existing_id is not None:
             st.caption(
@@ -396,7 +482,7 @@ def render_db_save_section(result: InferenceResult, meta: Optional[Dict[str, Any
 
 
 # =====================================================================
-# 3) 결과 표시 — 검출 목록의 선택/수정/삭제/추가는 기존 두 페이지와 동일
+# 4) 결과 표시 — 검출 목록의 선택/수정/삭제/추가는 기존 두 페이지와 동일
 # =====================================================================
 
 def render_run_summary(result: InferenceResult, sensor: str) -> None:
@@ -605,29 +691,30 @@ def _detections_for_selection(detections: List[Dict], selected_indices: List[int
     return selected or detections
 
 
-def render_result(result: InferenceResult, sensor: str) -> None:
-    """추론 결과를 요약 줄 → (왼쪽) 박스 그린 이미지 · (오른쪽) 편집 가능한 검출 목록으로 그린다."""
-    render_run_summary(result, sensor)
-
-    flash_message = st.session_state.pop(_SESSION_FLASH_KEY, None)
-    if flash_message:
-        st.success(flash_message)
-
-    # 왼쪽: 탐지 이미지, 오른쪽: 검출 목록.
-    # 표에서 선택한 행을 이미지에 반영해야 하므로 표(오른쪽)를 먼저 그린다.
-    image_col, table_col = st.columns([2, 1])
-    with table_col:
-        selected_indices = render_detection_table(result.detections, sensor)
-    with image_col:
+def render_image_panel(result: InferenceResult, selected_indices: List[int]) -> None:
+    """왼쪽 이미지 카드: 파일명과 박스가 그려진 탐지 이미지를 보여준다."""
+    with st.container(border=True):
         st.subheader("탐지 결과")
+        st.caption(f"파일: {result.filename}")
         selected_detections = _detections_for_selection(result.detections, selected_indices)
         st.image(draw_boxes(result.scene, selected_detections), use_container_width=True)
         if selected_indices:
             st.caption("선택한 행의 박스만 표시 중입니다. 표 선택을 해제하면 전체 박스가 표시됩니다.")
 
 
+def render_placeholder_panel() -> None:
+    """아직 실행한 결과가 없을 때 왼쪽에 ARGOS 로고와 안내 문구를 보여준다."""
+    with st.container(border=True):
+        st.subheader("탐지 결과")
+        if _LOGO_PATH.exists():
+            _, middle, _ = st.columns([1, 3, 1])
+            with middle:
+                st.image(str(_LOGO_PATH), use_container_width=True)
+        st.info("오른쪽에서 이미지를 업로드하고 실행하면 탐지 결과가 여기에 표시됩니다.")
+
+
 # =====================================================================
-# 4) 세션 상태 — DB 저장 버튼 클릭(rerun) 후에도 결과를 유지한다
+# 5) 세션 상태 — DB 저장 버튼 클릭(rerun) 후에도 결과를 유지한다
 # =====================================================================
 
 def _save_result(
@@ -664,57 +751,72 @@ def _sync_saved_result_with_upload(controls: EosarControls) -> None:
 
 
 # =====================================================================
-# 5) 페이지 진입점
+# 6) 페이지 진입점 — 왼쪽: 이미지 / 오른쪽: 입력·검출 목록·DB 저장
 # =====================================================================
 
 def render_eosar_page() -> None:
     """EO/SAR 통합 탐지 페이지 전체를 그린다: 입력 받기 → 센서별 추론 → 결과 표시 → DB 저장."""
-    st.title("EO/SAR 통합 표적 탐지")
-    st.caption("파일명의 센서 종류(EO/SAR)에 따라 알맞은 탐지 모델을 자동 선택합니다")
+    _render_header()
 
-    controls = render_controls()
+    image_col, side_col = st.columns([0.56, 0.44], gap="large")
+
+    with side_col:
+        controls = render_controls()
     _sync_saved_result_with_upload(controls)
 
+    error_message: Optional[str] = None
     if controls.run_clicked:
         if controls.image_file is None:
-            st.warning("이미지를 업로드하세요.")
-            st.stop()
-        if controls.meta is None:
-            st.error(
+            error_message = "이미지를 업로드하세요."
+        elif controls.meta is None:
+            error_message = (
                 "파일명이 형식에 맞지 않아 어떤 모델(EO/SAR)로 탐지할지 정할 수 없습니다. "
-                "형식: 자산명_지역명_지역ID_센서_YYYY-MM-DD HHMMSS "
+                "형식: 자산명_지역명_지역ID_센서_YYYY-MM-DD 시각 "
                 "(예: 425-1_개풍군_1_EO_2023-12-30 220000.png)"
             )
-            st.stop()
-
-        sensor = controls.meta["sensor_type"]
-        file_bytes = controls.image_file.getvalue()
-        with st.spinner(f"{sensor} 모델로 추론 중입니다. CPU 환경에서는 시간이 걸릴 수 있습니다."):
-            try:
-                if sensor == "EO":
-                    result = eo_service.run_inference(file_bytes, controls.image_file.name)
-                else:
-                    result = sar_service.run_inference(
-                        file_bytes, controls.image_file.name, controls.rotate_k
-                    )
-            except (eo_service.ModelUnavailableError, sar_service.ModelUnavailableError) as exc:
-                _clear_saved_result()
-                st.error(str(exc))
-                st.stop()
-            except Exception as exc:
-                _clear_saved_result()
-                st.error(f"추론 실패: {exc}")
-                st.stop()
-
-        _save_result(result, sensor, controls.image_file.name, file_bytes)
+        else:
+            sensor = controls.meta["sensor_type"]
+            file_bytes = controls.image_file.getvalue()
+            with image_col:
+                with st.spinner(f"{sensor} 모델로 추론 중입니다. CPU 환경에서는 시간이 걸릴 수 있습니다."):
+                    try:
+                        if sensor == "EO":
+                            result = eo_service.run_inference(file_bytes, controls.image_file.name)
+                        else:
+                            result = sar_service.run_inference(
+                                file_bytes, controls.image_file.name, controls.rotate_k
+                            )
+                    except (eo_service.ModelUnavailableError, sar_service.ModelUnavailableError) as exc:
+                        _clear_saved_result()
+                        error_message = str(exc)
+                    except Exception as exc:
+                        _clear_saved_result()
+                        error_message = f"추론 실패: {exc}"
+                    else:
+                        _save_result(result, sensor, controls.image_file.name, file_bytes)
 
     result: Optional[InferenceResult] = st.session_state.get(_SESSION_RESULT_KEY)
     sensor: Optional[str] = st.session_state.get(_SESSION_SENSOR_KEY)
-    if result is None or sensor is None:
-        return
 
-    render_result(result, sensor)
+    # 오른쪽 열: 요약 → 검출 목록(편집) → DB 저장. (표 선택 결과를 왼쪽 이미지에 반영해야
+    # 하므로 오른쪽을 먼저 그린다.)
+    selected_indices: List[int] = []
+    with side_col:
+        if error_message:
+            st.warning(error_message)
+        if result is not None and sensor is not None:
+            render_run_summary(result, sensor)
+            flash_message = st.session_state.pop(_SESSION_FLASH_KEY, None)
+            if flash_message:
+                st.success(flash_message)
+            selected_indices = render_detection_table(result.detections, sensor)
+            # 파일명 메타데이터로 두 테이블 + (image_id 이름의) 이미지 파일을 한 번에 저장.
+            meta = parse_image_meta(result.filename)
+            render_db_save_section(result, meta)
 
-    # 탐지 결과 아래: 파일명 메타데이터로 두 테이블 + (image_id 이름의) 이미지 파일을 한 번에 저장.
-    meta = parse_image_meta(result.filename)
-    render_db_save_section(result, meta)
+    # 왼쪽 열: 실행 전에는 ARGOS 로고, 실행 후에는 탐지 이미지.
+    with image_col:
+        if result is None or sensor is None:
+            render_placeholder_panel()
+        else:
+            render_image_panel(result, selected_indices)
