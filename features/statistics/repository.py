@@ -37,3 +37,12 @@ def fetch_regions() -> List[str]:
             text(f"SELECT DISTINCT region_name FROM `{_DB}`.`image_analysis` ORDER BY region_name")
         ).fetchall()
     return [row[0] for row in rows]
+
+
+def fetch_equipment_classes() -> List[str]:
+    """equipment에 있는 장비 구분(class_name) 목록을 중복 없이 돌려준다 (장비 필터용)."""
+    with get_engine().connect() as conn:
+        rows = conn.execute(
+            text(f"SELECT DISTINCT class_name FROM `{_DB}`.`equipment` ORDER BY class_name")
+        ).fetchall()
+    return [row[0] for row in rows]

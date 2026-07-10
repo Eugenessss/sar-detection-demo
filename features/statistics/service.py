@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from features.statistics.repository import fetch_detection_stats, fetch_regions
+from features.statistics.repository import fetch_detection_stats, fetch_equipment_classes, fetch_regions
 
 # 화면에 노출할 기간 선택지와 실제 timedelta 매핑 (선택 버튼 라벨 = 이 딕셔너리 키).
 INTERVALS: Dict[str, timedelta] = {
@@ -53,10 +53,16 @@ def build_statistics(start: datetime, end: datetime) -> Optional[StatisticsResul
     return StatisticsResult(start=start, end=end, raw=df)
 
 
-def pivot_time_series(df: pd.DataFrame, region: Optional[str] = None) -> pd.DataFrame:
-    """촬영시각 x 장비명 피벗(선 그래프용)을 만든다. region이 주어지면 그 지역만 남긴다."""
+def pivot_time_series(
+    df: pd.DataFrame,
+    region: Optional[str] = None,
+    equipment: Optional[List[str]] = None,
+) -> pd.DataFrame:
+    """촬영시각 x 장비명 피벗(선 그래프용)을 만든다. region이 주어지면 그 지역만, equipment가 주어지면 그 장비들만 남긴다."""
     if region:
         df = df[df["region_name"] == region]
+    if equipment is not None:
+        df = df[df["class_name"].isin(equipment)]
     return df.pivot_table(
         index="captured_time", columns="class_name", values="detected_count", aggfunc="sum"
     ).fillna(0)
@@ -65,3 +71,8 @@ def pivot_time_series(df: pd.DataFrame, region: Optional[str] = None) -> pd.Data
 def list_regions() -> List[str]:
     """위치 선택 팝오버에 쓸 지역(region_name) 목록을 돌려준다."""
     return fetch_regions()
+
+
+def list_equipment_classes() -> List[str]:
+    """장비 선택 버튼에 쓸 장비 구분(class_name) 목록을 돌려준다."""
+    return fetch_equipment_classes()
