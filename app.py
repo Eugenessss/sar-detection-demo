@@ -16,11 +16,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from features.alerts.view import render_alerts_page
 from features.db.view import render_db_page
 from features.eo.view import render_eo_page
-<<<<<<< HEAD
-from features.HQ_DESK.view import render_hq_desk_page
-=======
 from features.eosar.view import render_eosar_page
->>>>>>> 7299576954e5c78ef0d940f79023271d59684403
+from features.HQ_DESK.view import render_hq_desk_page
 from features.sar.view import render_sar_page
 from features.statistics.view import render_statistics_page
 from home import render_home_page
