@@ -53,6 +53,23 @@ def fetch_alerts(level: Optional[str], status: Optional[str], limit: int = 100) 
     return [dict(row._mapping) for row in rows]
 
 
+def fetch_report(alert_id: int) -> Optional[Dict[str, Any]]:
+    """선택 경보의 최신 보고서를 작성자 이름과 함께 가져온다 (없으면 None)."""
+    with get_engine().connect() as conn:
+        row = conn.execute(
+            text(
+                f"SELECT ir.report_id, ir.title, ir.summary, ir.report_status, "
+                f"ir.distributed_at, au.user_name, au.role "
+                f"FROM `{_DB}`.`intel_report` ir "
+                f"JOIN `{_DB}`.`app_user` au ON au.user_id = ir.author_id "
+                "WHERE ir.alert_id = :alert_id "
+                "ORDER BY ir.report_id DESC LIMIT 1"
+            ),
+            {"alert_id": alert_id},
+        ).fetchone()
+    return dict(row._mapping) if row else None
+
+
 def mark_checked(alert_id: int) -> int:
     """선택 경보를 확인 처리한다."""
     with get_engine().begin() as conn:

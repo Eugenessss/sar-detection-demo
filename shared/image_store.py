@@ -12,10 +12,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from sqlalchemy import text
-
-from shared.database import get_engine
-
 _DB = "satellite_intel"
 
 
@@ -81,6 +77,10 @@ def save_analysis_and_detections(
     avg_confidence는 미사용 방침이라 0으로 채운다 (컬럼이 NOT NULL이라 빈값 불가).
     돌려주는 값은 (재사용했거나 새로 부여된) image_id.
     """
+    from sqlalchemy import text
+
+    from shared.database import get_engine
+
     with get_engine().begin() as conn:   # begin(): 성공 시 커밋, 예외 시 전체 롤백
         existing = conn.execute(
             text(

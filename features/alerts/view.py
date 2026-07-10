@@ -101,11 +101,38 @@ def _render_alert_detail(alert: Dict) -> None:
                 st.rerun()
 
     with right:
-        if st.button("보고 필요: 초안 생성", use_container_width=True):
+        if st.button("상세 메세지 생성", use_container_width=True):
             try:
                 report_id, created = service.ensure_report_draft(int(alert["alert_id"]))
             except Exception as exc:
-                st.error(f"보고서 초안 생성 실패: {exc}")
+                st.error(f"상세 메세지 생성 실패: {exc}")
             else:
-                verb = "생성" if created else "기존 초안 확인"
-                st.success(f"보고서 초안 {verb}: report_id={report_id}")
+                verb = "생성" if created else "기존 메세지 확인"
+                st.success(f"상세 메세지 {verb}: report_id={report_id}")
+
+    # 버튼 처리 뒤에 조회하므로, 방금 생성한 초안도 같은 화면에서 바로 보인다.
+    _render_report_detail(int(alert["alert_id"]))
+
+
+def _render_report_detail(alert_id: int) -> None:
+    """선택 경보에 연결된 메세지 상세(제목·상태·작성자·요약)를 보여준다."""
+    try:
+        report = service.fetch_report(alert_id)
+    except Exception as exc:
+        st.warning(f"메세지 조회 실패: {exc}")
+        return
+    if report is None:
+        return
+
+    st.subheader("메세지 상세")
+    with st.container(border=True):
+        status_label = "배포됨" if report["report_status"] == "DISTRIBUTED" else "초안"
+        st.markdown(f"**{report['title']}**")
+        meta = (
+            f"report_id={report['report_id']} | 상태: {status_label} | "
+            f"작성자: {report['user_name']} ({report['role']})"
+        )
+        if report["distributed_at"]:
+            meta += f" | 배포시각: {report['distributed_at']}"
+        st.caption(meta)
+        st.write(report["summary"])
