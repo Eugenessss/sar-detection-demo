@@ -28,6 +28,9 @@ import streamlit as st
 
 from features.sar import repository, service
 from features.sar.loader import load_sar_models
+from shared.alert_ui import render_change_analysis_result
+from shared.change_analysis import analyze_image_change
+from shared.image_store import image_paths_for, parse_image_meta, save_analysis_and_detections
 from shared.viz import draw_boxes
 
 _SESSION_RESULT_KEY = "sar_last_result"
@@ -137,47 +140,6 @@ def render_run_summary(result: service.SarInferenceResult) -> None:
 # 2-1) DB 연동 (satellite_intel) — EO 페이지와 같은 방식
 # =====================================================================
 
-def _parse_image_meta(filename: Optional[str]) -> Optional[Dict[str, Any]]:
-    """파일명에서 image_analysis에 저장할 메타데이터를 뽑는다.
-
-    형식: "자산명_지역명_지역ID_센서_YYYY-MM-DD HHMMSS.확장자"
-    (예: 425-1_개풍군_1_SAR_2026-07-09 100000.tif)
-    형식이 다르면 None을 돌려준다 (DB 저장 없이 탐지 기능만 사용 가능).
-    """
-    if not filename:
-        return None
-    parts = Path(filename).stem.split("_")
-    if len(parts) != 5:
-        return None
-
-    asset_name, region_name, region_id_raw, sensor_raw, time_raw = parts
-    if not region_id_raw.isdigit():
-        return None
-    sensor_type = sensor_raw.upper()
-    if sensor_type not in ("EO", "SAR"):
-        return None
-    try:
-        # 파일명에는 ':'를 쓸 수 없어 시각을 붙여 쓴다 (100000 → 10:00:00).
-        captured_time = datetime.strptime(time_raw, "%Y-%m-%d %H%M%S")
-    except ValueError:
-        return None
-
-    return {
-        "asset_name": asset_name,
-        "region_name": region_name,
-        "region_id": int(region_id_raw),
-        "sensor_type": sensor_type,
-        "captured_time": captured_time,
-    }
-
-
-def _image_paths_for(filename: str) -> Tuple[str, str]:
-    """원본/결과 이미지가 저장될 경로(DB에 기록할 프로젝트 기준 상대경로)를 만든다."""
-    original_rel = f"original_image/{filename}"
-    result_rel = f"result_image/{Path(filename).stem}.png"
-    return original_rel, result_rel
-
-
 @st.cache_data(ttl=60, show_spinner=False)
 def _load_equipment_ids() -> Dict[str, Any]:
     """equipment 사전 {class_name: equipment_id}를 조회한다 (실패해도 화면이 죽지 않게 error로 전달)."""
@@ -215,9 +177,9 @@ def render_db_save_section(
 
         if meta is None:
             st.info(
-                "파일명이 저장 형식이 아니어서 DB 저장은 할 수 없습니다. "
+                f"파일명 '{result.filename}'이 저장 형식이 아니어서 DB 저장은 할 수 없습니다. "
                 "형식: 자산명_지역명_지역ID_센서_YYYY-MM-DD HHMMSS "
-                "(예: 425-1_개풍군_1_SAR_2026-07-09 100000.tif)"
+                "(예: 425-1_개풍군_1_SAR_2026-07-09 100000.tif — 시각 앞은 공백/밑줄 모두 허용)"
             )
             return
 
@@ -226,7 +188,7 @@ def render_db_save_section(
             st.warning(f"DB 연결 실패: {equipment_ctx['error']}")
             return
 
-        original_rel, result_rel = _image_paths_for(result.filename)
+        original_rel, result_rel = image_paths_for(result.filename)
 
         # 1) image_analysis에 저장될 내용 미리보기 (image_id는 DB가 자동 부여하므로 표시하지 않음).
         st.caption("image_analysis에 저장될 내용")
@@ -271,12 +233,12 @@ def render_db_save_section(
         if skipped:
             st.warning(f"equipment에 없는 라벨은 저장에서 제외됩니다: {', '.join(skipped)}")
 
-        # 같은 파일을 이미 저장했다면 안내한다 (버튼을 다시 누르면 새 image_id로 추가 저장됨).
+        # 같은 파일을 이미 저장했다면 안내한다 (다시 저장하면 같은 행을 덮어쓴다).
         saved_map = st.session_state.get(_SESSION_SAVED_KEY, {})
         if result.filename in saved_map:
             st.caption(
                 f"이미 저장된 파일입니다 (image_id={saved_map[result.filename]}). "
-                "다시 저장하면 새 image_id로 한 행 더 추가됩니다."
+                "다시 저장하면 같은 image_id의 탐지 결과를 덮어씁니다."
             )
 
         # 3) 저장 버튼 하나로 이미지 파일 2개 + 두 테이블을 함께 저장한다.
@@ -290,9 +252,10 @@ def render_db_save_section(
                     original_rel,
                     result_rel,
                 )
-                image_id = repository.save_analysis_and_detections(
+                image_id = save_analysis_and_detections(
                     meta, original_rel, result_rel, rows, created_at
                 )
+                outcome = analyze_image_change(image_id)
             except Exception as exc:
                 st.error(f"DB 저장 실패: {exc}")
             else:
@@ -304,6 +267,7 @@ def render_db_save_section(
                     f"원본 → {original_rel}, 결과 → {result_rel} "
                     f"({created_at:%Y-%m-%d %H:%M:%S})"
                 )
+                render_change_analysis_result(outcome)
 
 
 def render_detection_table(rows: List[Dict]) -> List[int]:
@@ -642,7 +606,7 @@ def render_sar_page() -> None:
                 st.success(flash_message)
             selected_indices = render_detection_table(result.detections)
             # 파일명에서 읽은 메타데이터로 두 테이블 + 이미지 파일을 한 번에 저장.
-            meta = _parse_image_meta(result.filename)
+            meta = parse_image_meta(result.filename)
             render_db_save_section(result, meta)
 
     with right_col:

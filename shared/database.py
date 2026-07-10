@@ -59,6 +59,9 @@ def get_engine() -> Engine:
                     pool_pre_ping=True,    # 오래돼 끊긴 연결을 자동 감지해 다시 연결
                     pool_recycle=3600,     # 1시간 넘은 유휴 연결은 재생성 (서버측 강제 종료 대비)
                     future=True,
+                    # RDS 서버 기본 타임존(UTC) 때문에 NOW()/CURRENT_TIMESTAMP가 9시간
+                    # 어긋나므로, 이 앱의 모든 연결을 한국시간(+09:00)으로 고정한다.
+                    connect_args={"init_command": "SET time_zone = '+09:00'"},
                 )
     return _engine
 

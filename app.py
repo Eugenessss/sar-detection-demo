@@ -13,6 +13,7 @@ import streamlit as st
 # features/·shared/ 패키지를 어디서 실행하든 불러올 수 있게 한다.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from features.alerts.view import render_alerts_page
 from features.db.view import render_db_page
 from features.eo.view import render_eo_page
 from features.sar.view import render_sar_page
@@ -29,6 +30,7 @@ pages = [
     st.Page(render_sar_page, title="SAR", url_path="sar"),
     st.Page(render_eo_page, title="EO", url_path="eo"),
     st.Page(render_db_page, title="DB", url_path="db"),
+    st.Page(render_alerts_page, title="Alerts", url_path="alerts"),
     st.Page(render_statistics_page, title="Statistics", url_path="statistics"),
     st.Page(render_blank_1_page, title="Blank 1", url_path="blank-1"),
 ]

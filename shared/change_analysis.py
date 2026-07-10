@@ -26,6 +26,7 @@ class ChangeAnalysisOutcome:
     events_created: int                    # 이번 실행에서 새로 추가된 change_event 수
     alerts_created: List[Dict[str, Any]]   # 이번 실행에서 새로 발행된 경보 목록
     replaced_previous_analysis: bool       # 기존 분석 로그가 있는 상태의 수정 기록인지
+    unchanged_supported: bool = False       # DB event_type enum이 UNCHANGED를 지원하는지
 
 
 def analyze_image_change(image_id: int) -> ChangeAnalysisOutcome:
@@ -39,6 +40,7 @@ def analyze_image_change(image_id: int) -> ChangeAnalysisOutcome:
             raise ValueError(f"image_analysis에 image_id={image_id} 행이 없습니다.")
 
         previous_id = _fetch_previous_image_id(conn, current)
+        unchanged_supported = _supports_event_type(conn, "UNCHANGED")
         if previous_id is None:
             return ChangeAnalysisOutcome(
                 image_id=image_id,
@@ -46,6 +48,7 @@ def analyze_image_change(image_id: int) -> ChangeAnalysisOutcome:
                 events_created=0,
                 alerts_created=[],
                 replaced_previous_analysis=False,
+                unchanged_supported=unchanged_supported,
             )
 
         # 기존 로그가 이미 있으면 이번 실행은 '수정 기록' 추가다.
@@ -65,7 +68,12 @@ def analyze_image_change(image_id: int) -> ChangeAnalysisOutcome:
             ).scalar_one()
         )
 
-        events_created = _insert_change_events(conn, previous_id, image_id)
+        events_created = _insert_change_events(
+            conn,
+            previous_id,
+            image_id,
+            include_unchanged=unchanged_supported,
+        )
         _insert_alerts(conn, image_id)
         alerts_created = _fetch_alerts_for_image(conn, image_id, last_alert_id)
 
@@ -75,14 +83,42 @@ def analyze_image_change(image_id: int) -> ChangeAnalysisOutcome:
         events_created=int(events_created),
         alerts_created=alerts_created,
         replaced_previous_analysis=replaced_previous_analysis,
+        unchanged_supported=unchanged_supported,
     )
 
 
+# event_type enum 지원 여부 캐시. 스키마는 실행 중 바뀌지 않으므로
+# information_schema 조회는 프로세스당 값별로 한 번이면 충분하다.
+_EVENT_TYPE_SUPPORT: Dict[str, bool] = {}
+
+
+def _supports_event_type(conn, event_type: str) -> bool:
+    if event_type in _EVENT_TYPE_SUPPORT:
+        return _EVENT_TYPE_SUPPORT[event_type]
+    row = conn.execute(
+        text(
+            """
+            SELECT column_type
+            FROM information_schema.columns
+            WHERE table_schema = :db
+              AND table_name = 'change_event'
+              AND column_name = 'event_type'
+            """
+        ),
+        {"db": _DB},
+    ).fetchone()
+    supported = bool(row and f"'{event_type}'" in str(row[0]))
+    _EVENT_TYPE_SUPPORT[event_type] = supported
+    return supported
+
+
 def _fetch_image(conn, image_id: int) -> Optional[Dict[str, Any]]:
+    # FOR UPDATE: 같은 이미지를 여러 세션이 동시에 분석하면 로그/경보가 중복 생성될 수
+    # 있어, 이 행을 잠가 같은 image_id의 분석을 한 번에 하나씩만 실행되게 한다.
     row = conn.execute(
         text(
             f"SELECT asset_name, region_name, captured_time "
-            f"FROM `{_DB}`.`image_analysis` WHERE image_id = :image_id"
+            f"FROM `{_DB}`.`image_analysis` WHERE image_id = :image_id FOR UPDATE"
         ),
         {"image_id": image_id},
     ).fetchone()
@@ -90,13 +126,18 @@ def _fetch_image(conn, image_id: int) -> Optional[Dict[str, Any]]:
 
 
 def _fetch_previous_image_id(conn, current: Dict[str, Any]) -> Optional[int]:
+    # 탐지 결과가 저장된(분석 완료) 영상만 비교 기준으로 삼는다.
+    # image_analysis만 있고 detection_result가 없는 빈 영상이 기준이 되면
+    # 모든 장비가 NEW로 잡혀 경보가 폭주하기 때문이다.
     row = conn.execute(
         text(
-            f"SELECT image_id FROM `{_DB}`.`image_analysis` "
-            "WHERE asset_name = :asset_name "
-            "AND region_name = :region_name "
-            "AND captured_time < :captured_time "
-            "ORDER BY captured_time DESC, image_id DESC LIMIT 1"
+            f"SELECT ia.image_id FROM `{_DB}`.`image_analysis` ia "
+            "WHERE ia.asset_name = :asset_name "
+            "AND ia.region_name = :region_name "
+            "AND ia.captured_time < :captured_time "
+            f"AND EXISTS (SELECT 1 FROM `{_DB}`.`detection_result` dr "
+            "WHERE dr.image_id = ia.image_id) "
+            "ORDER BY ia.captured_time DESC, ia.image_id DESC LIMIT 1"
         ),
         {
             "asset_name": current["asset_name"],
@@ -107,7 +148,12 @@ def _fetch_previous_image_id(conn, current: Dict[str, Any]) -> Optional[int]:
     return int(row[0]) if row else None
 
 
-def _insert_change_events(conn, previous_image_id: int, current_image_id: int) -> int:
+def _insert_change_events(
+    conn,
+    previous_image_id: int,
+    current_image_id: int,
+    include_unchanged: bool,
+) -> int:
     # 기존 로그는 지우지 않는다. 같은 (이전, 현재, 장비) 조합의 '마지막 로그'와
     # 수량이 달라진 경우에만 새 로그를 추가한다 (수정 기록은 summary에 [수정] 표시).
     result = conn.execute(
@@ -127,6 +173,8 @@ def _insert_change_events(conn, previous_image_id: int, current_image_id: int) -
                      AND COALESCE(curr.detected_count, 0) = 0 THEN 'DISAPPEARED'
                 WHEN COALESCE(curr.detected_count, 0) > COALESCE(prev.detected_count, 0)
                      THEN 'INCREASED'
+                WHEN COALESCE(curr.detected_count, 0) = COALESCE(prev.detected_count, 0)
+                     THEN 'UNCHANGED'
                 ELSE 'DECREASED'
               END,
               COALESCE(prev.detected_count, 0),
@@ -165,7 +213,10 @@ def _insert_change_events(conn, previous_image_id: int, current_image_id: int) -
               ) latest ON latest.max_change_id = ce.change_id
             ) last_log
               ON last_log.equipment_id = ids.equipment_id
-            WHERE COALESCE(prev.detected_count, 0) <> COALESCE(curr.detected_count, 0)
+            WHERE (
+                COALESCE(prev.detected_count, 0) <> COALESCE(curr.detected_count, 0)
+                OR :include_unchanged = 1
+              )
               AND (
                 last_log.equipment_id IS NULL
                 OR last_log.previous_count <> COALESCE(prev.detected_count, 0)
@@ -176,6 +227,7 @@ def _insert_change_events(conn, previous_image_id: int, current_image_id: int) -
         {
             "previous_image_id": previous_image_id,
             "current_image_id": current_image_id,
+            "include_unchanged": 1 if include_unchanged else 0,
         },
     )
     return int(result.rowcount or 0)
@@ -216,6 +268,7 @@ def _insert_alerts(conn, image_id: int) -> None:
             JOIN `{_DB}`.`image_analysis` ia
               ON ce.current_image_id = ia.image_id
             WHERE ce.current_image_id = :image_id
+              AND ce.event_type <> 'UNCHANGED'
               AND (
                 e.threat_level = 1
                 OR (e.threat_level = 2 AND ABS(ce.delta_count) >= 10)

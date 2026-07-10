@@ -70,10 +70,13 @@ captured_time
 같은 asset_name
 같은 region_name
 captured_time이 현재보다 이전
+detection_result가 저장되어 있는(분석 완료된) 영상만
 가장 최근 촬영시각 1개
 ```
 
 직전 이미지가 없으면 최초 영상으로 보고 경보를 만들지 않습니다.
+
+탐지 결과 없이 image_analysis만 저장된 빈 영상은 비교 기준에서 제외합니다. 빈 영상이 기준이 되면 모든 장비가 NEW로 잡혀 경보가 폭주하기 때문입니다.
 
 ### 3. 기존 분석 로그는 지우지 않습니다 (append-only)
 
@@ -102,7 +105,7 @@ captured_time이 현재보다 이전
 | Truck | 10 | 4 | `DECREASED` | -6 |
 | ZIL131 | 2 | 0 | `DISAPPEARED` | -2 |
 
-수량이 같으면 `change_event`를 만들지 않습니다.
+수량이 같으면 `UNCHANGED` 로그가 남습니다. 단 append-only 규칙은 그대로라, 마지막 로그와 같은 내용이면 다시 추가하지 않습니다.
 
 생성된 개수(`events_created`)는 별도 COUNT 쿼리 없이 INSERT 결과의 처리 행 수(rowcount)에서 바로 얻습니다.
 
@@ -166,8 +169,8 @@ Truck: 5대
 결과:
 
 ```text
-T72는 0대에서 2대로 증가 -> change_event 생성
-Truck은 5대에서 5대로 동일 -> 아무것도 생성하지 않음
+T72는 0대에서 2대로 증가 -> change_event 생성 (NEW)
+Truck은 5대에서 5대로 동일 -> UNCHANGED 로그 1건 (경보 없음)
 T72의 threat_level이 1이면 -> alert에 URGENT 생성
 ```
 
@@ -178,3 +181,16 @@ T72의 threat_level이 1이면 -> alert에 URGENT 생성
 - 변화 기록은 `change_event`에 저장합니다.
 - 실제 경보 메시지는 `alert`에 저장합니다.
 - 기존 로그와 경보는 절대 지우지 않습니다. 다시 분석하면 수량이 달라진 장비만 `[수정]` 로그로 추가되고, 같은 내용의 재분석은 아무것도 만들지 않습니다.
+
+## 현재 DB 제약
+
+`region_id`는 실제 `image_analysis` 컬럼으로 확인되어 계속 사용합니다.
+
+2026-07-10에 적용된 스키마 변경 2건:
+
+```text
+change_event.event_type enum에 UNCHANGED 추가 → 변화 없음도 로그로 남음
+alert에 UNIQUE(change_id) 제약 추가 → 이벤트당 경보 1건이 DB 차원에서 보장됨
+```
+
+코드는 enum에 `UNCHANGED`가 있는지 프로세스당 한 번 확인해 캐시합니다. 그래서 **enum을 바꾼 뒤에는 앱을 재시작**해야 반영됩니다. `UNCHANGED` 이벤트는 경보를 만들지 않습니다 (`_insert_alerts`가 제외).
