@@ -10,7 +10,7 @@
 
 ## 1. 지도 화면 (view.py)
 
-- Google Earth Engine(Sentinel-2 true color) 배경 위에, DB `alert` 테이블에서 조회한 **가장 최신 경보 1건**만 마커로 표시.
+- Google Earth Engine(Sentinel-2 true color) 배경 위에, DB `alert` 테이블에서 조회한 **지역(region)별 가장 최신 경보 1건씩**을 마커로 표시 (지역이 여러 곳이면 마커도 여러 개).
 - 마커 색상은 경보수준(`alert_level`)에 따라 다름: 🔴 긴급(URGENT) · 🟠 중요(IMPORTANT) · 🔵 특이(NOTICE).
 - 마커에는 툴팁만 있고 팝업(클릭 시 텍스트박스)은 없음.
 - 마커를 클릭하면 `st.session_state["view"] = "detail"`로 전환되어 상세 화면으로 이동. `app.py` 메뉴에는 지도 화면("HQ Desk")만 노출되고, 상세 화면은 같은 페이지 안에서 세션 상태로만 전환되는 "숨겨진" 화면.
@@ -60,7 +60,7 @@
 
 FK 체인: `alert.change_id → change_event.change_id`, `change_event.current_image_id → image_analysis.image_id`, `image_analysis.region_id → region.region_id` (위도·경도), `change_event.equipment_id → equipment.equipment_id` (적군 장비).
 
-- `get_alerts(limit=1)` — 지도에 표시할 **가장 최신 경보 1건**만 조회 (`ORDER BY created_at DESC LIMIT 1`).
+- `get_alerts()` — 지도에 표시할 경보를 **지역(region_id)별로 가장 최신 것 1건씩** 조회 (`ROW_NUMBER() OVER (PARTITION BY region_id ORDER BY created_at DESC) = 1`). region마다 "최신 1건" 규칙 자체는 기존과 동일하고, 대상만 전체 → 지역별로 나뉨.
 - `get_alert_by_id(alert_id)` — 상세 화면용 단건 조회.
 - `Alert` dataclass에 적군 장비 관련 필드(`asset_category`, `asset_threat_level`, `asset_description`)를 추가해 `equipment` 테이블 정보까지 함께 반환.
 
@@ -83,3 +83,44 @@ FK 체인: `alert.change_id → change_event.change_id`, `change_event.current_i
 
 - 현재 seed된 `alert` 1~16번은 `change_event.previous_image_id / current_image_id`가 대량 생성된 더미 `image_analysis` row(빈 경로)를 가리키고 있어서, 실제 사진(8199번대)과는 DB상 연결이 안 되어 있음. 지금은 폴더 스캔 fallback으로 데모가 동작하지만, **`change_event`가 실제 이미지에 연결되면** 코드 수정 없이 자동으로 DB 조회 결과를 사용하게 됨.
 - 환경 이슈: 로컬에 Python 인터프리터가 여러 개(`miniconda3\envs\streamlit`, `Python312`) 있어서 패키지 설치 시 실제 실행되는 인터프리터를 확인하고 설치해야 함.
+
+## 5. 아군 자산: strike_asset → ally_asset 교체 + 사거리 필터 + 타격반경 원 (신규)
+
+오른쪽(3) "아군 자산 위치" 패널을 `strike_asset`(부대당 1행) 대신 `ally_asset`(부대+장비+무장
+조합당 1행, `features/commander/ally_asset.sql` 참고)을 쓰도록 교체하고, 적군까지 거리를
+계산해 사거리를 만족하는 무장만 선택할 수 있게 하고, 선택한 무장의 타격반경을 가운데 사진에
+원으로 겹쳐 그리는 기능을 추가했다.
+
+### service.py
+
+- `AllyAsset` 데이터클래스(`get_ally_assets()`)로 `ally_asset` 테이블 전체(부대명·장비명·
+  종류·무장명·사거리·타격반경(`effect_radius_m`)·좌표 등)를 조회.
+- `haversine_km()` — 위경도 두 점의 직선거리(km) 계산 (지구 반지름 6371.0088km 기준).
+- `evaluate_ally_assets(assets, enemy_lat, enemy_lon)` — 각 자산에 적군(경보) 위치까지의
+  `distance_km`과, `range_km >= distance_km`인지(`in_range`)를 채워 넣는다. 적군 위치는
+  `alert`에 이미 조인되어 있는 `region.latitude/longitude`(=`Alert.latitude/longitude`)를
+  그대로 쓴다 (별도 조회 불필요).
+- `group_ally_units(assets)` — 같은 부대의 여러 무장(행)을 지도 마커 1개로 묶기 위한 헬퍼.
+- 기존 `FriendlyAsset`/`get_strike_assets()`/`_STRIKE_ASSET_QUERY`는 제거하고 위 함수들로 대체.
+
+### detail_view.py
+
+- 오른쪽 지도: 부대 단위로 마커 1개만 표시(무장 옵션 수만큼 중복 X). 마커를 클릭하면
+  `st.session_state["hq_selected_unit"]`에 부대명을 저장하고, 그 부대의 무장 옵션들을
+  체크박스 목록으로 보여준다.
+  - `in_range`(사거리 충족)인 옵션만 체크 가능. 사거리 밖인 옵션은 비활성화(disabled) 표시.
+  - 체크 상태는 경보(`alert_id`)별로 `st.session_state[f"hq_selected_munitions_{alert_id}"]`
+    (asset_id 집합)에 저장 → 경보를 바꾸면 선택이 초기화된다.
+- 가운데 사진: 체크된 무장 옵션마다 `effect_radius_m`(타격반경, m)을 반지름으로 하는 원을
+  사진 정중앙에 겹쳐 그린다(옵션별로 색을 다르게 순환). `effect_radius_m`이 없는 옵션(예:
+  대전차고폭탄·130mm·600mm탄도미사일 — 공개 자료 없음)은 원 없이 범례에만 "타격반경 정보
+  없음"으로 표시.
+  - **m→px 환산 가정**: 원본 사진이 정확히 840×840 정사각형이라는 점을 이용해, 사진 1장이
+    실제로 가로·세로 1,000m(1km)를 촬영한 것으로 가정하고(사용자 확인, 실제 GSD 미확인)
+    `_PX_PER_METER = 480px / 1000m = 0.48px/m`로 고정 계산한다. 실제 GSD가 확인되면
+    `detail_view.py`의 `_PHOTO_ASSUMED_FOOTPRINT_M` 값만 바꾸면 된다.
+  - **사진 박스 크기 변경**: 정확한 m→px 환산을 위해 사진 박스를 기존 "폭 100% + 높이
+    480px 고정(object-fit:cover, 브라우저 폭에 따라 좌우가 잘림)"에서 **"480×480px 고정
+    정사각형"** 으로 바꿨다. 원본이 정사각형이라 정사각형 박스에서는 잘림 없이 균일하게
+    축소되어 원의 반지름을 정확한 비율로 그릴 수 있기 때문. 대신 넓은 화면에서는 사진이
+    컬럼 전체 폭을 채우지 못하고 가운데 정렬된 정사각형으로 보인다(레이아웃 트레이드오프).
