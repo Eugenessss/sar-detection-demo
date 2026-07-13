@@ -150,7 +150,7 @@ def _render_image_slot(
             continue
 
         count = _circle_count_for(asset)
-        centers = _circle_centers(asset, width_px, height_px, count, seed=(alert_id, asset.asset_id))
+        centers = _circle_centers(asset, width_px, height_px, count, seed=f"{alert_id}-{asset.asset_id}")
         diameter_px = max(1.0, asset.effect_radius_m * _METERS_PER_PIXEL * 2)
         d_pct_w = diameter_px / width_px * 100
         d_pct_h = diameter_px / height_px * 100
