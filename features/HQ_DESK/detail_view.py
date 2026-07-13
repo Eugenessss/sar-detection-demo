@@ -6,10 +6,11 @@
 전체를 3:4:3 비율의 3칸으로 나눈다.
   왼쪽(3)   : 적군 자산 정보 카드. 경보수준·제목·변화요약·지역 + 탐지된 적군
               장비(equipment 테이블: 종류·위협도·설명) - 전부 DB 조회 결과.
-  가운데(4) : 위성사진. [H-4]/[H-2]/[H-Hour] 버튼으로 시간을 고르면 그 사진
-              한 장이 (result_image/ 폴더, 촬영 시각순 정렬) 보이고, 오른쪽에서
-              사거리를 만족해 체크한 무장 옵션이 있으면 사진 중앙에 타격반경
-              (effect_radius_m) 크기의 원이 겹쳐 그려진다.
+  가운데(4) : 위성사진. 사진은 (크기가 제각각이라) 잘라내거나 늘리지 않고 원본
+              비율 그대로 화면 폭에 맞춰 보여준다. [H-4]/[H-2]/[H-Hour] 버튼으로
+              시간을 고르고, 오른쪽에서 사거리를 만족해 체크한 무장 옵션이 있으면
+              사진 위에 그 무장의 타격반경(effect_radius_m) 크기 원이 겹쳐 그려진다
+              (1픽셀 = 1미터로 계산).
   오른쪽(3) : 아군 자산 지도 (경보 지도와 같은 EO 배경 + 부대 단위 마커) + 그 아래
               마커를 클릭하면 나오는, 그 부대가 쓸 수 있는 무장 옵션 체크리스트.
               아군 자산은 ally_asset 테이블(부대+장비+무장 조합)에서 조회하고,
@@ -17,10 +18,12 @@
               옵션만 체크(선택) 가능하다.
 """
 import base64
+import random
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import streamlit as st
+from PIL import Image
 from streamlit_folium import st_folium
 
 from features.HQ_DESK import service
@@ -62,73 +65,121 @@ def _image_data_uri(path: Path) -> str:
     return f"data:{mime};base64,{data}"
 
 
-# 사진 박스와 오른쪽 지도(st_folium)의 높이를 똑같은 값으로 맞춰서, 두 박스의
-# 위/아래 끝이 나란히 정렬되도록 한다 (오른쪽 지도의 height=도 이 값을 그대로 쓴다).
+# 오른쪽 아군 자산 지도(st_folium) 높이 기준값. 사진은 이제 원본 비율로 그리므로
+# (사진마다 크기가 다를 수 있어) 항상 이 높이와 정확히 일치하진 않을 수 있다.
 _PHOTO_MAP_HEIGHT_PX = 480
 
-# 위성사진(원본 840x840 정사각형) 한 장이 실제로 촬영하는 것으로 "가정"하는 가로/세로
-# 폭(m). effect_radius_m(실측 타격반경, m)을 사진 위 원의 픽셀 반지름으로 바꾸는 데 쓴다.
-# (실제 GSD 값이 확인되면 이 값만 바꾸면 된다.)
-_PHOTO_ASSUMED_FOOTPRINT_M = 1000.0
-# 사진 박스를 840x840 원본과 같은 비율의 고정 정사각형(_PHOTO_MAP_HEIGHT_PX)으로 그리므로,
-# 화면에 보이는 1m당 픽셀 수는 (표시 박스 크기 / 가정 촬영폭)으로 고정된다.
-_PX_PER_METER = _PHOTO_MAP_HEIGHT_PX / _PHOTO_ASSUMED_FOOTPRINT_M  # 기본값: 0.48 px/m
+# "일단 1픽셀당 1m"로 그린다는 요청에 따른 고정 환산 비율. 실제 GSD(지상표본거리)가
+# 확인되면 이 값만 바꾸면 된다.
+_METERS_PER_PIXEL = 1.0
 
 # 원이 여러 개 겹쳐도 구분되도록 옵션마다 돌아가며 쓰는 색상.
 _CIRCLE_COLORS = ["#FF4B4B", "#FFA940", "#00BFFF", "#7CFC00", "#DA70D6", "#FFD700"]
 
 
+def _get_image_size(path: Path) -> Tuple[int, int]:
+    """이미지 파일의 원본 (가로, 세로) 픽셀 크기를 읽는다."""
+    with Image.open(path) as img:
+        return img.size
+
+
+def _circle_count_for(asset: service.AllyAsset) -> int:
+    """무장 종류에 따라 그릴 원의 개수를 정한다 (요청사항 기준, 그 외는 중앙 1개)."""
+    if asset.munition_name == "집속탄":
+        return 200
+    if asset.munition_name == "130mm 무유도미사일":
+        return 12
+    if asset.category == "자주곡사포":
+        return 6
+    return 1
+
+
+def _circle_centers(
+    asset: service.AllyAsset, width_px: int, height_px: int, count: int, seed: Any,
+) -> List[Tuple[float, float]]:
+    """count가 1이면 사진 정중앙, 그 이상이면 사진 안쪽 무작위 위치 목록을 만든다.
+
+    seed를 고정해서, 같은 경보·같은 자산이면 다시 그릴 때도 같은 배치가 나오도록 한다
+    (매 rerun마다 점이 흔들리며 다시 찍히는 걸 방지).
+    """
+    if count <= 1:
+        return [(width_px / 2.0, height_px / 2.0)]
+
+    radius_px = (asset.effect_radius_m or 0.0) * _METERS_PER_PIXEL
+    rng = random.Random(seed)
+    margin_x = min(radius_px, width_px / 2.0)
+    margin_y = min(radius_px, height_px / 2.0)
+
+    centers: List[Tuple[float, float]] = []
+    for _ in range(count):
+        cx = rng.uniform(margin_x, width_px - margin_x) if width_px > 2 * margin_x else width_px / 2.0
+        cy = rng.uniform(margin_y, height_px - margin_y) if height_px > 2 * margin_y else height_px / 2.0
+        centers.append((cx, cy))
+    return centers
+
+
 def _render_image_slot(
     path: Optional[Path],
-    circles: Optional[List[service.AllyAsset]] = None,
-    height_px: int = _PHOTO_MAP_HEIGHT_PX,
+    circles: Optional[List[Tuple[int, service.AllyAsset]]] = None,
 ) -> None:
-    """이미지 한 장을 고정 정사각형(height_px x height_px) 박스로 보여준다.
+    """이미지를 원본 비율 그대로(잘리거나 늘어나지 않게) 화면 폭에 맞춰 보여준다.
 
-    circles로 넘어온 아군 자산(체크된 무장 옵션)마다, 사진 정중앙을 기준으로
-    effect_radius_m을 반지름으로 하는 원을 겹쳐 그린다 (effect_radius_m이 없는
-    옵션은 원 없이 범례에만 "타격반경 정보 없음"으로 표시).
+    circles는 (alert_id, asset) 목록. asset마다 무장 종류에 따라 정해진 개수
+    (기본 1개 · 집속탄 200개 · 자주곡사포 6개 · 130mm 무유도미사일 12개)만큼
+    effect_radius_m 크기의 원을 사진 위에 겹쳐 그린다 (1픽셀 = 1미터로 계산).
 
-    박스를 원본과 같은 정사각형 고정 크기로 그리는 이유: object-fit:cover를 폭
-    100%(가변) 박스에 쓰면 브라우저 폭에 따라 잘리는 비율이 달라져서 원의 반지름을
-    실제 미터 단위로 정확히 환산할 수 없기 때문. 정사각형↔정사각형은 잘림 없이
-    균일하게 축소되므로 (표시크기/가정촬영폭)의 고정 배율(_PX_PER_METER)로 계산할 수 있다.
+    사진이 제각각 크기라, 원의 위치·크기를 원본 픽셀 좌표의 '비율(%)'로 계산해서
+    사진이 화면 폭에 맞춰 확대/축소되어도 원이 항상 같은 상대 위치·비율로 따라오게 한다.
+    래퍼 div에 aspect-ratio를 원본과 똑같이 지정해 두면, 축소돼도 잘림·여백 없이
+    사진과 원이 함께 정확한 비율로 줄어든다.
     """
     if path is None or not path.exists():
         st.info("이미지가 없습니다. (준비 중)")
         return
 
-    overlay_html = ""
+    width_px, height_px = _get_image_size(path)
+
+    overlay_divs: List[str] = []
     legend_items: List[str] = []
-    for idx, asset in enumerate(circles or []):
+    for idx, (alert_id, asset) in enumerate(circles or []):
         color = _CIRCLE_COLORS[idx % len(_CIRCLE_COLORS)]
         label = f"{asset.platform_name}·{asset.munition_name}"
+
         if asset.effect_radius_m is None:
             legend_items.append(f'<span style="color:{color};">●</span> {label} (타격반경 정보 없음)')
             continue
 
-        diameter_px = max(6, round(asset.effect_radius_m * _PX_PER_METER * 2))
-        overlay_html += (
-            f'<div style="position:absolute;top:50%;left:50%;'
-            f'width:{diameter_px}px;height:{diameter_px}px;'
-            f'transform:translate(-50%,-50%);border-radius:50%;'
-            f'border:2px solid {color};background:{color}33;'
-            f'pointer-events:none;"></div>'
-        )
-        legend_items.append(f'<span style="color:{color};">●</span> {label} ({asset.effect_radius_m:.0f}m)')
+        count = _circle_count_for(asset)
+        centers = _circle_centers(asset, width_px, height_px, count, seed=(alert_id, asset.asset_id))
+        diameter_px = max(1.0, asset.effect_radius_m * _METERS_PER_PIXEL * 2)
+        d_pct_w = diameter_px / width_px * 100
+        d_pct_h = diameter_px / height_px * 100
+
+        for cx, cy in centers:
+            left_pct = cx / width_px * 100
+            top_pct = cy / height_px * 100
+            overlay_divs.append(
+                f'<div style="position:absolute;top:{top_pct:.3f}%;left:{left_pct:.3f}%;'
+                f'width:{d_pct_w:.3f}%;height:{d_pct_h:.3f}%;'
+                f'transform:translate(-50%,-50%);border-radius:50%;'
+                f'border:1.5px solid {color};background:{color}33;'
+                f'pointer-events:none;box-sizing:border-box;"></div>'
+            )
+
+        count_note = f" × {count}" if count > 1 else ""
+        legend_items.append(f'<span style="color:{color};">●</span> {label} ({asset.effect_radius_m:.0f}m{count_note})')
 
     st.markdown(
-        f'<div style="position:relative;width:{height_px}px;height:{height_px}px;margin:0 auto;'
-        f'border-radius:4px;overflow:hidden;">'
+        f'<div style="position:relative;width:100%;aspect-ratio:{width_px}/{height_px};line-height:0;">'
         f'<img src="{_image_data_uri(path)}" '
-        f'style="width:100%;height:100%;object-fit:cover;display:block;" />'
-        f'{overlay_html}'
+        f'style="width:100%;height:100%;display:block;border-radius:4px;object-fit:contain;" />'
+        f'{"".join(overlay_divs)}'
         f'</div>',
         unsafe_allow_html=True,
     )
     if legend_items:
         st.markdown(
-            f'<div style="text-align:center;font-size:0.8rem;margin-top:4px;">{" &nbsp;·&nbsp; ".join(legend_items)}</div>',
+            f'<div style="font-size:0.8rem;margin-top:4px;">{" &nbsp;·&nbsp; ".join(legend_items)}</div>',
             unsafe_allow_html=True,
         )
 
@@ -158,7 +209,8 @@ def _render_alert_photos(alert_id: int, circles: List[service.AllyAsset]) -> Non
 
     image_idx = selected_idx - offset
     image_path = images[image_idx] if 0 <= image_idx < len(images) else None
-    _render_image_slot(image_path, circles=circles)
+    circle_pairs = [(alert_id, asset) for asset in circles]
+    _render_image_slot(image_path, circles=circle_pairs)
 
 
 def _find_unit_by_click(lat: float, lng: float, units: List[Dict[str, Any]], tolerance: float = 0.001) -> Optional[Dict[str, Any]]:
@@ -178,7 +230,8 @@ def _render_friendly_asset_panel(
 
     체크리스트는 사거리(range_km)가 적군까지 거리(distance_km)를 만족하는 옵션만
     선택(체크) 가능하고, 체크 상태는 st.session_state[selection_key](asset_id 집합)에
-    저장되어 가운데 사진의 원 오버레이에 곧바로 반영된다.
+    저장된다. (사진에 바로 반영되도록 이 값은 render_alert_detail_page 맨 앞에서
+    한 번 더 동기화한다 — 아래 render_alert_detail_page의 주석 참고.)
     """
     st.caption("아군 자산 위치")
     # 왼쪽 사진 컬럼은 "촬영 시각" 라벨 + 시간 선택 버튼줄이 캡션 위에 하나 더 있어서,
@@ -247,6 +300,37 @@ def _render_friendly_asset_panel(
             st.checkbox(label, value=False, disabled=True, key=widget_key)
 
 
+def _sync_selected_munitions(
+    alert: service.Alert, evaluated_assets: List[service.AllyAsset], selection_key: str,
+) -> None:
+    """체크박스를 실제로 그리기 전에, 이미 세션에 반영된 위젯 클릭 결과를 selection
+    set에 먼저 반영한다.
+
+    문제였던 상황: 컬럼 순서상 가운데(사진)가 오른쪽(체크박스)보다 먼저 그려지는데,
+    체크박스를 클릭한 직후의 rerun에서 selection set 갱신이 체크박스 렌더링 코드
+    안(오른쪽 패널)에서만 일어나면, 이미 그 앞에서 그려진 사진은 "클릭 전" 상태를
+    보여주게 된다 (한 박자 늦게 반영되는 버그). Streamlit은 위젯에 key를 주면 클릭
+    직후 rerun 시작 시점에 이미 st.session_state[key]를 새 값으로 갱신해두므로,
+    위젯을 굳이 다시 그리지 않아도 이 값을 미리 읽어 selection set에 반영할 수 있다.
+    그래서 사진을 그리기 전, 여기서 한 번 더 동기화한다.
+    """
+    selected_ids = st.session_state.setdefault(selection_key, set())
+    selected_unit_name = st.session_state.get("hq_selected_unit")
+    if selected_unit_name is None:
+        return
+
+    for asset in evaluated_assets:
+        if asset.unit_name != selected_unit_name or not asset.in_range:
+            continue
+        widget_key = f"hq_munition_{alert.alert_id}_{asset.asset_id}"
+        if widget_key not in st.session_state:
+            continue
+        if st.session_state[widget_key]:
+            selected_ids.add(asset.asset_id)
+        else:
+            selected_ids.discard(asset.asset_id)
+
+
 def render_alert_detail_page() -> None:
     """경보 상세 페이지 전체를 그린다."""
     # 페이지 상단 여백을 줄여서 전체 내용을 위로 올린다 (제목을 없앤 만큼 빈 공간이 남지 않도록).
@@ -284,6 +368,11 @@ def render_alert_detail_page() -> None:
 
     # alert(경보)마다 선택 상태를 따로 기억해, 다른 경보를 보면 체크가 초기화되게 한다.
     selection_key = f"hq_selected_munitions_{alert.alert_id}"
+
+    # 체크박스(오른쪽 패널)를 그리기 전에, 방금 클릭된 상태를 selection set에 먼저
+    # 반영한다 — 그래야 이 아래에서 계산하는 selected_assets가 가운데 사진에 "바로" 반영된다.
+    _sync_selected_munitions(alert, evaluated_assets, selection_key)
+
     selected_ids = st.session_state.get(selection_key, set())
     selected_assets = [a for a in evaluated_assets if a.asset_id in selected_ids]
 
