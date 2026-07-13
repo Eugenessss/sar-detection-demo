@@ -5,33 +5,79 @@
 조회 로직은 statistics/service.py를, 보고서 작성은 statistics/report.py를 직접 부른다.
 레이아웃: 왼쪽 좁은 칸에 장소 선택·조회 기간·장비 선택 컨트롤을 몰아넣고, 오른쪽 넓은 칸에 그래프를 제목 바로 아래 배치한다.
 """
+import calendar
 import datetime
 from typing import List, Optional
 
+import altair as alt
 import streamlit as st
 
 from features.statistics import report, service
 
 _INTERVAL_LABELS = list(service.INTERVALS.keys())
 
+# 세션 상태 키·CSS 클래스에 쓸 ASCII 슬러그 (한글 라벨을 그대로 key로 쓰면 CSS 선택자가 깨진다).
+_INTERVAL_KEY_SLUGS = {
+    "12시간": "12h",
+    "24시간": "24h",
+    "1주": "1w",
+    "1개월": "1m",
+    "1년": "1y",
+}
+
+
+def _inject_highlighted_interval_css() -> None:
+    """기간 선택 버튼 중 24시간·1년 버튼을 부드러운 빨간색으로 강조하는 CSS를 주입한다."""
+    rules = "".join(
+        f'.st-key-interval_{_INTERVAL_KEY_SLUGS[label]} button {{'
+        f'background-color: #f6cac6; border-color: #e2a29c; color: #7a2b23;}}'
+        f'.st-key-interval_{_INTERVAL_KEY_SLUGS[label]} button:hover {{'
+        f'background-color: #f0b3ad; border-color: #d98a82;}}'
+        for label in service.HIGHLIGHTED_INTERVALS
+    )
+    st.markdown(f"<style>{rules}</style>", unsafe_allow_html=True)
+
 
 def render_location_control() -> str:
-    """왼쪽 칸 맨 위: 장소 선택 팝오버를 그리고, 선택된 region_name을 돌려준다 ("전체"면 필터 없음)."""
-    with st.popover("장소 선택"):
-        try:
-            regions = service.list_regions()
-        except Exception as exc:
-            st.error(f"지역 목록 조회 실패: {exc}")
-            regions = []
-        return st.selectbox("지역 (region_name)", ["전체"] + regions, key="stats_region")
+    """왼쪽 칸 맨 위: 장소 선택 팝오버 하나를 그리고, 그 안에 지역 이름을 버튼으로 바로 나열한다.
+    선택된 region_name을 돌려준다 ("전체"면 필터 없음)."""
+    try:
+        regions = service.list_regions()
+    except Exception as exc:
+        st.error(f"지역 목록 조회 실패: {exc}")
+        regions = []
+
+    if "stats_region" not in st.session_state:
+        st.session_state.stats_region = "전체"
+
+    with st.popover(f"장소 선택 ({st.session_state.stats_region})", use_container_width=True):
+        for region_name in ["전체"] + regions:
+            if st.button(region_name, use_container_width=True, key=f"region_{region_name}"):
+                st.session_state.stats_region = region_name
+
+    return st.session_state.stats_region
+
 
 def render_equipment_controls() -> Optional[List[str]]:
-    """왼쪽 칸: 조회 기간 아래에 장비 선택 팝오버를 그리고, 체크박스로 고른 장비(class_name) 목록을 돌려준다 (None이면 전체)."""
+    """왼쪽 칸: 위협등급(threat_level 1/2/3) 체크박스로 먼저 거른 뒤,
+    그 등급에 속한 장비만 장비 선택 팝오버에 체크박스로 올려 고른 장비(class_name) 목록을 돌려준다 (없으면 None)."""
+    st.markdown("**위협등급 필터**")
+    threat_columns = st.columns(len(service.THREAT_LEVELS))
+    selected_threat_levels = []
+    for level, column in zip(service.THREAT_LEVELS, threat_columns):
+        with column:
+            if st.checkbox(f"위협도 {level}", value=True, key=f"threat_level_{level}"):
+                selected_threat_levels.append(level)
+
+    if not selected_threat_levels:
+        st.caption("위협등급을 하나 이상 선택하면 장비 목록이 표시됩니다.")
+        return []
+
     try:
-        equipment_classes = service.list_equipment_classes()
+        equipment_classes = service.list_equipment_classes(selected_threat_levels)
     except Exception as exc:
         st.error(f"장비 목록 조회 실패: {exc}")
-        equipment_classes = []
+        return None
 
     selected = []
     with st.popover("장비 선택", use_container_width=True):
@@ -45,25 +91,86 @@ def render_equipment_controls() -> Optional[List[str]]:
 
 
 def render_period_controls() -> tuple:
-    """왼쪽 칸: 시작일 입력·기간 선택 버튼·조회범위 안내를 세로로 몰아 그리고, (시작시각, 종료시각)을 돌려준다."""
+    """왼쪽 칸: 시작 일시(연/월/일/시 선택)·기간 선택 버튼·조회범위 안내를 세로로 몰아 그리고, (시작시각, 종료시각)을 돌려준다."""
     st.subheader("조회 기간")
-    start_date = st.date_input("시작일", value=datetime.date.today())
+
+    today = datetime.date.today()
+    if "stats_start_year" not in st.session_state:
+        st.session_state.stats_start_year = today.year
+    if "stats_start_month" not in st.session_state:
+        st.session_state.stats_start_month = today.month
+    if "stats_start_day" not in st.session_state:
+        st.session_state.stats_start_day = today.day
+    if "stats_start_hour" not in st.session_state:
+        st.session_state.stats_start_hour = 0
+
+    st.markdown("**시작 일시**")
+    year_col, month_col, day_col, hour_col = st.columns(4)
+    with year_col:
+        year = st.selectbox(
+            "연", list(range(today.year - 5, today.year + 1)),
+            format_func=lambda y: f"{y}년", key="stats_start_year",
+        )
+    with month_col:
+        month = st.selectbox(
+            "월", list(range(1, 13)),
+            format_func=lambda m: f"{m}월", key="stats_start_month",
+        )
+
+    max_day = calendar.monthrange(year, month)[1]
+    if st.session_state.stats_start_day > max_day:
+        st.session_state.stats_start_day = max_day
+
+    with day_col:
+        day = st.selectbox(
+            "일", list(range(1, max_day + 1)),
+            format_func=lambda d: f"{d}일", key="stats_start_day",
+        )
+    with hour_col:
+        hour = st.selectbox(
+            "시", list(range(24)),
+            format_func=lambda h: f"{h}시", key="stats_start_hour",
+        )
+
+    start = datetime.datetime(year, month, day, hour)
 
     if "stats_interval" not in st.session_state:
         st.session_state.stats_interval = service.DEFAULT_INTERVAL
 
     st.markdown("**기간 선택**")
+    _inject_highlighted_interval_css()
     for label in _INTERVAL_LABELS:
-        if st.button(label, use_container_width=True, key=f"interval_{label}"):
+        if st.button(label, use_container_width=True, key=f"interval_{_INTERVAL_KEY_SLUGS[label]}"):
             st.session_state.stats_interval = label
     interval_label = st.session_state.stats_interval
 
-    start, end = service.resolve_range(start_date, interval_label)
+    start, end = service.resolve_range(start, interval_label)
     st.info(f"**조회 범위** ({interval_label})\n\n{start} ~ {end}")
 
-    return start, end
+    return start, end, interval_label
 
 
+
+
+def _render_actual_vs_average_chart(overlay_data, empty_message: str) -> None:
+    """실제(실선)/평균(점선) 겹쳐그리기 장문형 데이터를 장비별 색상으로 그린다 (1년·24시간 오버레이 공용)."""
+    if overlay_data.empty:
+        st.info(empty_message)
+        return
+    chart = (
+        alt.Chart(overlay_data)
+        .mark_line()
+        .encode(
+            x=alt.X("captured_time:T", title="촬영시각"),
+            y=alt.Y("detected_count:Q", title="탐지 수"),
+            color=alt.Color("class_name:N", title="장비"),
+            strokeDash=alt.StrokeDash("series:N", title="구분 (실제/평균)"),
+            tooltip=["class_name", "series", "captured_time:T", "detected_count:Q"],
+        )
+        .properties(height=380)
+        .interactive()
+    )
+    st.altair_chart(chart, use_container_width=True)
 
 
 def render_graph_column(
@@ -71,8 +178,11 @@ def render_graph_column(
     end: datetime.datetime,
     region: str,
     equipment: Optional[List[str]],
+    interval_label: str,
 ) -> None:
-    """오른쪽 칸: 탐지 통계를 조회해 그래프를 제목 바로 아래 그리고, 그 아래 원본 표를 붙인다."""
+    """오른쪽 칸: 탐지 통계를 조회해 그래프를 제목 바로 아래 그리고, 그 아래 원본 표를 붙인다.
+    기간 선택이 "1년"이면 실제 추이(실선)와 반월(보름) 단위 평균(점선)을, "24시간"이면 실제 추이와 2시간 단위 평균을
+    한 그래프에 겹쳐 그린다."""
     with st.spinner("통계 조회 중..."):
         try:
             result = service.build_statistics(start, end)
@@ -87,7 +197,15 @@ def render_graph_column(
     st.subheader("시간대별 탐지 추이")
     selected_region = None if region == "전체" else region
     time_series = service.pivot_time_series(result.raw, selected_region, equipment)
-    st.line_chart(time_series, use_container_width=True)
+
+    if interval_label == "1년":
+        overlay_data = service.build_yearly_overlay(result.raw, start.year, selected_region, equipment)
+        _render_actual_vs_average_chart(overlay_data, "해당 연도에 표시할 통계가 없습니다.")
+    elif interval_label == "24시간":
+        overlay_data = service.build_two_hour_overlay(result.raw, start, end, selected_region, equipment)
+        _render_actual_vs_average_chart(overlay_data, "해당 기간에 표시할 통계가 없습니다.")
+    else:
+        st.line_chart(time_series, use_container_width=True)
 
     with st.expander("원본 조회 결과"):
         st.dataframe(result.raw, use_container_width=True, hide_index=True)
@@ -138,8 +256,8 @@ def render_statistics_page() -> None:
     with controls_col:
         region = render_location_control()
         equipment = render_equipment_controls()
-        start, end = render_period_controls()
+        start, end, interval_label = render_period_controls()
 
 
     with graph_col:
-        render_graph_column(start, end, region, equipment)
+        render_graph_column(start, end, region, equipment, interval_label)
