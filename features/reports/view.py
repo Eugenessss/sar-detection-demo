@@ -14,6 +14,7 @@ import pandas as pd
 import streamlit as st
 
 from features.reports import report, repository
+from shared import s3_store
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _RESULT_DIR = _PROJECT_ROOT / "result_image"
@@ -48,17 +49,17 @@ def _load_image_detail(image_id: int) -> Dict[str, Any]:
 def _find_result_image(info: Dict[str, Any]) -> Optional[Path]:
     """결과 이미지 파일을 찾는다.
 
-    1순위: DB의 result_image_path가 가리키는 파일
+    1순위: DB의 result_image_path가 가리키는 파일 (로컬에 없으면 S3에서 내려받음)
     2순위: result_image/{image_id}.* (eosar 페이지가 image_id 이름으로 저장)
     둘 다 없으면 None.
     """
     recorded = str(info.get("result_image_path") or "").strip()
-    candidates: List[Path] = []
     if recorded:
-        candidates.append(_PROJECT_ROOT / recorded)
-    candidates.extend(sorted(_RESULT_DIR.glob(f"{info['image_id']}.*")))
+        found = s3_store.ensure_local(recorded)
+        if found is not None:
+            return found
 
-    for candidate in candidates:
+    for candidate in sorted(_RESULT_DIR.glob(f"{info['image_id']}.*")):
         if candidate.is_file():
             return candidate
     return None

@@ -45,6 +45,9 @@ def _render_enemy_asset_card(alert: service.Alert) -> None:
     st.caption("지역")
     st.write(alert.region or "지역 정보가 없습니다.")
 
+    st.caption("센서")
+    st.write(alert.sensor_type or "센서 정보가 없습니다.")
+
     st.markdown("<hr style='margin:4px 0 10px 0;' />", unsafe_allow_html=True)
 
     st.markdown("**적군 자산 정보**")

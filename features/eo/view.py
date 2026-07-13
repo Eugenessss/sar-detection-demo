@@ -9,8 +9,9 @@ DB 연동(satellite_intel)은 SAR과 반대 방향이다:
     (예: 425-1_개풍군_1_EO_2023-12-30 220000.png, 파일명에 ':'를 못 쓰므로 시각은 붙여 쓴다)
   - 저장 버튼 하나로 image_analysis(처음이면 새 행, 같은 영상 재저장이면 기존 행 재사용·덮어쓰기)와
     detection_result(클래스별 집계, avg_confidence는 미사용 방침이라 0)를 한 번에 저장하고,
-    원본 이미지는 original_image/, 박스가 그려진 결과 이미지는 result_image/ 폴더에 저장한다.
+    원본·결과 이미지는 S3에만 올린다 (shared/s3_store.py — 로컬 폴더는 조회 시 캐시 전용).
 """
+import io
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
@@ -26,6 +27,7 @@ from features.eo.loader import load_eo_models
 from shared.alert_ui import render_change_analysis_result
 from shared.change_analysis import analyze_image_change
 from shared.database import get_engine
+from shared import s3_store
 from shared.image_store import image_paths_for, parse_image_meta, save_analysis_and_detections
 from shared.viz import draw_boxes
 
@@ -66,9 +68,6 @@ _EO_LABELS = [
 _DB = "satellite_intel"
 
 # 이미지 파일이 저장될 폴더 (프로젝트 루트 기준).
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_ORIGINAL_DIR = _PROJECT_ROOT / "original_image"
-_RESULT_DIR = _PROJECT_ROOT / "result_image"
 
 
 # =====================================================================
@@ -133,15 +132,18 @@ def _save_image_files(
     original_rel: str,
     result_rel: str,
 ) -> None:
-    """원본 이미지는 original_image/, 박스가 그려진 결과 이미지는 result_image/에 저장한다."""
-    _ORIGINAL_DIR.mkdir(parents=True, exist_ok=True)
-    _RESULT_DIR.mkdir(parents=True, exist_ok=True)
+    """원본과 결과 이미지를 S3에만 올린다 (로컬 폴더는 조회 시 캐시로만 쓰인다).
 
+    업로드 실패 시 예외가 올라가고, 호출부에서 DB 저장 전에 부르므로
+    실패하면 DB에는 아무것도 기록되지 않는다.
+    """
     if file_bytes:
-        (_PROJECT_ROOT / original_rel).write_bytes(file_bytes)
+        s3_store.upload_bytes(original_rel, file_bytes)
 
     annotated = draw_boxes(result.scene, result.detections)
-    annotated.save(_PROJECT_ROOT / result_rel)
+    buffer = io.BytesIO()
+    annotated.save(buffer, format="PNG")
+    s3_store.upload_bytes(result_rel, buffer.getvalue())
 
 
 def render_db_save_section(result: service.EoInferenceResult, meta: Optional[Dict[str, Any]]) -> None:

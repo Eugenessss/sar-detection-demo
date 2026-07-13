@@ -30,6 +30,7 @@ import ee
 import folium
 from sqlalchemy import text
 
+from shared import s3_store
 from shared.database import get_engine
 
 _DB = "satellite_intel"
@@ -63,6 +64,7 @@ MAX_IMAGES_PER_ALERT = 3
 _ALERT_QUERY = f"""
     SELECT
         a.alert_id, a.alert_level, a.title, a.message, a.created_at,
+        ia.sensor_type,
         eq.class_name, eq.category AS eq_category, eq.threat_level, eq.description AS eq_description,
         r.region_id, r.region_name, r.latitude, r.longitude
     FROM `{_DB}`.`alert` a
@@ -74,6 +76,8 @@ _ALERT_QUERY = f"""
 
 # region_id로 파티션을 나눠 alert.created_at이 가장 최근인 1건만 남긴다
 # (region마다 "최신 경보 1건" 규칙은 그대로이고, 대상이 지역별로 나뉜 것뿐).
+# {where}에는 센서 필터("WHERE ranked.sensor_type = :sensor")가 들어갈 수 있다 —
+# WHERE는 ROW_NUMBER보다 먼저 적용되므로, 필터 후 남은 경보 중 지역별 최신 1건이 뽑힌다.
 _LATEST_ALERTS_PER_REGION_QUERY = f"""
     SELECT * FROM (
         SELECT ranked.*,
@@ -82,6 +86,7 @@ _LATEST_ALERTS_PER_REGION_QUERY = f"""
                    ORDER BY ranked.created_at DESC, ranked.alert_id DESC
                ) AS rn
         FROM ({_ALERT_QUERY}) ranked
+        {{where}}
     ) t
     WHERE rn = 1
     ORDER BY created_at DESC
@@ -95,6 +100,7 @@ class Alert:
     latitude: float
     longitude: float
     alert_level: str       # DB enum 원본값 (URGENT/IMPORTANT/NOTICE)
+    sensor_type: str = ""  # 경보 기준 영상의 센서 (EO/SAR)
     asset_name: str = ""   # 적군자산(장비) 이름 (equipment.class_name)
     asset_category: str = ""       # 적군자산 종류 (equipment.category)
     asset_threat_level: Optional[int] = None  # 적군자산 위협도 (equipment.threat_level)
@@ -111,6 +117,7 @@ def _row_to_alert(row) -> Alert:
         latitude=float(m["latitude"]),
         longitude=float(m["longitude"]),
         alert_level=m["alert_level"],
+        sensor_type=m["sensor_type"] or "",
         asset_name=m["class_name"] or "",
         asset_category=m["eq_category"] or "",
         asset_threat_level=m["threat_level"],
@@ -121,10 +128,18 @@ def _row_to_alert(row) -> Alert:
     )
 
 
-def get_alerts() -> List[Alert]:
-    """지도에 표시할 경보 목록을 지역(region)별로 가장 최근 것 1건씩 조회한다."""
+def get_alerts(sensor: Optional[str] = None) -> List[Alert]:
+    """지도에 표시할 경보 목록을 지역(region)별로 가장 최근 것 1건씩 조회한다.
+
+    sensor("EO"/"SAR")를 주면 그 센서의 경보만 대상으로 지역별 최신 1건을 고른다
+    (None이면 센서 무관 최신 1건 — 기존 동작).
+    """
+    where = "WHERE ranked.sensor_type = :sensor" if sensor else ""
+    params = {"sensor": sensor} if sensor else {}
     with get_engine().connect() as conn:
-        rows = conn.execute(text(_LATEST_ALERTS_PER_REGION_QUERY))
+        rows = conn.execute(
+            text(_LATEST_ALERTS_PER_REGION_QUERY.format(where=where)), params
+        )
         return [_row_to_alert(row) for row in rows]
 
 
@@ -162,9 +177,9 @@ _ALERT_IMAGES_QUERY = f"""
 def get_alert_images(alert_id: int) -> List[Path]:
     """alert -> change_event -> image_analysis로 조인해 result_image_path를 가져온다.
 
-    이 PC에 실제 파일이 있는 것만 돌려준다 (다른 팀원 PC에서 저장된 영상은 제외).
-    부족해도 다른 사진으로 채우지 않는다 — 경보와 무관한 사진이 시각 라벨을 달고
-    보이면 오도하기 때문. 화면은 빈 슬롯을 "이미지 없음"으로 표시한다.
+    로컬에 없는 파일은 S3에서 내려받아 채운다 (다른 팀원 PC에서 저장된 영상 공유).
+    그래도 없는 사진은 다른 것으로 채우지 않는다 — 경보와 무관한 사진이 시각 라벨을
+    달고 보이면 오도하기 때문. 화면은 빈 슬롯을 "이미지 없음"으로 표시한다.
     """
     with get_engine().connect() as conn:
         rows = conn.execute(
@@ -176,10 +191,8 @@ def get_alert_images(alert_id: int) -> List[Path]:
     for row in reversed(rows):  # DESC로 가져왔으니 오래된 순으로 다시 뒤집는다.
         m = dict(row._mapping)
         rel_path = m["result_image_path"] or m["original_image_path"]
-        if not rel_path:
-            continue
-        full_path = PROJECT_ROOT / rel_path
-        if full_path.is_file():
+        full_path = s3_store.ensure_local(rel_path)
+        if full_path is not None:
             images.append(full_path)
 
     return images[:MAX_IMAGES_PER_ALERT]

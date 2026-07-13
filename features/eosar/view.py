@@ -3,23 +3,26 @@
 기존 eo/view.py와 sar/view.py를 한 페이지로 합친 화면. 두 페이지는 흐름이 같아서
 (업로드 → 탐지 → 편집 가능한 검출 목록 → DB 저장) 하나로 통합했다.
 
-어떤 가중치로 탐지할지는 파일명이 정한다:
+입력은 로컬 업로드가 아니라 S3 원본 풀에서 고른다:
+  - S3의 original_image/ 프리픽스가 "분석할 원본 저장소"다. 목록에서 파일을 고르면
+    S3에서 받아(로컬 캐시) 추론에 투입한다. 분석 여부(image_analysis 존재)를 뱃지로 보여준다.
   - 파일명 형식: "자산명_지역명_지역ID_센서_YYYY-MM-DD 시각.확장자"
     (예: 425-1_개풍군_1_EO_2023-12-30 220000.png / 425-1_개풍군_1_SAR_2026-08-10 1000000.tif)
   - 센서 자리가 EO면 EO 탐지 가중치로, SAR이면 SAR 탐지+분류 파이프라인으로 실행하고,
     결과 표시도 각 센서의 기존 페이지와 같은 내용(요약·검출 목록·박스 이미지)으로 나온다.
 
-DB 저장은 기존 페이지와 한 가지가 다르다:
-  - original_image/·result_image/ 폴더에 저장되는 파일 이름을 (업로드 파일명이 아니라)
-    DB가 부여한 image_id로 쓴다 (예: original_image/8199.png, result_image/8199.png).
-    image_id는 저장 시점에야 정해지므로, 행을 먼저 확보해 image_id를 받고 그 이름으로
-    경로를 기록·파일을 저장한다. 전 과정이 한 트랜잭션이라 실패하면 DB도 롤백된다.
+DB 저장 규칙은 SAR/EO 페이지와 동일하다 (공용 shared/image_store 사용):
+  - 경로(=S3 키)는 파일명을 그대로 쓴다 (예: original_image/425-1_..., result_image/425-1_....png).
+    원본은 이미 S3 원본 풀에 있으므로 다시 올리지 않고, 결과 이미지만 업로드한 뒤 DB에
+    기록한다 (업로드 실패 시 DB에 아무것도 남지 않음). 과거 image_id 이름(8199.png 등)으로
+    저장된 객체는 DB가 그 경로를 기억하므로 조회에 문제없다.
 
 화면 배치 (Streamlit 기본 위젯만 사용, HTML/CSS 없음):
   - 왼쪽(넓게): 이미지 영역 — 실행 전에는 ARGOS 로고, 실행 후에는 박스가 그려진 탐지 이미지.
   - 오른쪽: 입력(업로드·모델 상태·회전·실행) → 요약 → 검출 목록(편집) → DB 저장.
     이미지가 커도 DB 저장 칸이 화면 밖으로 밀려나지 않도록 오른쪽 열에 모아두었다.
 """
+import io
 import re
 from collections import Counter
 from dataclasses import dataclass
@@ -35,9 +38,11 @@ from features.eo import service as eo_service
 from features.eo.loader import load_eo_models
 from features.sar import service as sar_service
 from features.sar.loader import load_sar_models
+from shared import s3_store
 from shared.alert_ui import render_change_analysis_result
 from shared.change_analysis import analyze_image_change
 from shared.database import get_engine
+from shared.image_store import image_paths_for, save_analysis_and_detections
 from shared.viz import draw_boxes
 
 # EO/SAR 결과 객체를 함께 다루기 위한 타입 (필드 중 detections/elapsed_sec/filename/scene은 공통).
@@ -52,9 +57,6 @@ _SESSION_FLASH_KEY = "eosar_flash_message"         # 수정/삭제/추가 후 re
 _DB = "satellite_intel"
 
 # 이미지 파일이 저장될 폴더 (프로젝트 루트 기준)와 페이지 자산(로고).
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_ORIGINAL_DIR = _PROJECT_ROOT / "original_image"
-_RESULT_DIR = _PROJECT_ROOT / "result_image"
 _LOGO_PATH = Path(__file__).resolve().parent / "assets" / "argos_logo.png"          # placeholder용 원본
 _LOGO_SMALL_PATH = Path(__file__).resolve().parent / "assets" / "argos_logo_small.png"  # 헤더용 축소본
 
@@ -175,30 +177,84 @@ def _render_header() -> None:
 @dataclass
 class EosarControls:
     """입력 영역에서 사용자가 고른 값들을 한 꾸러미로 담아 전달한다."""
-    image_file: Optional[Any]
+    filename: Optional[str]          # 선택한 원본의 파일명 (S3 키의 basename)
+    s3_key: Optional[str]            # 선택한 원본의 S3 키 (original_image/파일명)
     meta: Optional[Dict[str, Any]]   # 파일명에서 해석한 메타데이터 (형식이 다르면 None)
     rotate_k: int                    # SAR 전용 수동 회전 (EO에서는 무시됨)
     run_clicked: bool
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _list_s3_originals() -> Dict[str, Any]:
+    """S3 original_image/ 목록과 분석 여부를 조회한다 (60초 캐시).
+
+    파일명 형식이 맞는(=메타데이터가 있는) 객체만 목록에 넣는다. 분석 여부는
+    image_analysis에 같은 (자산, 지역ID, 센서, 촬영시각) 행이 있는지로 판정한다.
+    """
+    try:
+        keys = s3_store.list_keys("original_image/")
+    except Exception as exc:
+        return {"items": [], "error": str(exc)}
+
+    try:
+        with get_engine().connect() as conn:
+            rows = conn.execute(
+                text(
+                    f"SELECT asset_name, region_id, sensor_type, captured_time "
+                    f"FROM `{_DB}`.`image_analysis`"
+                )
+            ).fetchall()
+        analyzed = {(r[0], int(r[1]), r[2], r[3]) for r in rows}
+    except Exception:
+        analyzed = set()   # DB가 안 되면 뱃지 없이 목록만 보여준다
+
+    items = []
+    for key in keys:
+        name = key.split("/", 1)[1] if "/" in key else key
+        meta = parse_image_meta(name)
+        if not name or meta is None:
+            continue   # 형식이 다르면 센서를 알 수 없어 이 페이지에서 실행 불가
+        done = (
+            meta["asset_name"], meta["region_id"], meta["sensor_type"], meta["captured_time"]
+        ) in analyzed
+        items.append({"name": name, "key": key, "analyzed": done})
+    return {"items": items, "error": None}
+
+
 def render_controls() -> EosarControls:
-    """입력 카드: 업로드·모델 상태·(SAR일 때) 회전·실행 버튼을 세로로 그린다."""
+    """입력 카드: S3 원본 선택·모델 상태·(SAR일 때) 회전·실행 버튼을 세로로 그린다."""
     with st.container(border=True):
         st.subheader("데이터 및 이미지 선택")
 
-        image_file = st.file_uploader(
-            "이미지 업로드 (TIF / PNG / JPG)",
-            type=["tif", "tiff", "png", "jpg", "jpeg"],
+        listing = _list_s3_originals()
+        if listing["error"]:
+            st.error(f"S3 목록 조회 실패: {listing['error']}")
+        items = listing["items"]
+
+        refresh_col, count_col = st.columns([0.4, 0.6], vertical_alignment="center")
+        with refresh_col:
+            if st.button("목록 새로고침", use_container_width=True):
+                _list_s3_originals.clear()
+                st.rerun()
+        with count_col:
+            waiting = sum(1 for item in items if not item["analyzed"])
+            st.caption(f"원본 {len(items)}개 (분석 대기 {waiting}개)")
+
+        selected = st.selectbox(
+            "S3 원본 이미지 (original_image/)",
+            options=items,
+            index=None,
+            placeholder="분석할 이미지를 선택하세요",
+            format_func=lambda item: f"{item['name']}  ·  {'분석됨' if item['analyzed'] else '대기'}",
         )
+        filename = selected["name"] if selected else None
+        s3_key = selected["key"] if selected else None
 
         # 파일명에서 메타데이터(센서 포함)를 미리 읽는다. 실행 전에 어떤 모델을 쓸지 알 수 있다.
-        meta = parse_image_meta(image_file.name) if image_file is not None else None
+        meta = parse_image_meta(filename) if filename else None
 
-        if image_file is None:
+        if filename is None:
             st.caption("파일명의 센서 종류(EO/SAR)에 맞는 탐지 모델을 자동 선택합니다.")
-        elif meta is None:
-            st.error("파일명이 형식에 맞지 않아 센서(EO/SAR)를 알 수 없습니다.")
-            st.caption("형식: 자산명_지역명_지역ID_센서_YYYY-MM-DD 시각 (예: 425-1_개풍군_1_EO_2023-12-30 220000.png)")
         else:
             sensor = meta["sensor_type"]
             loader = load_eo_models if sensor == "EO" else load_sar_models
@@ -223,7 +279,8 @@ def render_controls() -> EosarControls:
         run_clicked = st.button("실행", type="primary", use_container_width=True)
 
     return EosarControls(
-        image_file=image_file,
+        filename=filename,
+        s3_key=s3_key,
         meta=meta,
         rotate_k=rotate_k,
         run_clicked=run_clicked,
@@ -267,111 +324,30 @@ def _find_existing_image_id(meta: Dict[str, Any]) -> Optional[int]:
     return int(row[0]) if row else None
 
 
-def _image_paths_for_id(image_id: int, original_suffix: str) -> Tuple[str, str]:
-    """image_id를 파일 이름으로 쓰는 원본/결과 이미지의 상대경로를 만든다."""
-    return f"original_image/{image_id}{original_suffix}", f"result_image/{image_id}.png"
-
-
 def _save_all(
     meta: Dict[str, Any],
-    file_bytes: Optional[bytes],
+    filename: str,
     annotated_image,
-    original_suffix: str,
     class_counts: List[Tuple[int, int]],
     created_at: datetime,
 ) -> Tuple[int, str, str]:
-    """image_analysis 행을 확보해 image_id를 받고, 그 이름으로 파일을 저장하며 두 테이블을 기록한다.
+    """결과 이미지를 S3에 올리고, 두 테이블을 공용 저장 로직으로 기록한다.
 
-    같은 (자산, 지역ID, 촬영시각, 센서) 영상이 이미 있으면 그 행을 재사용하고 탐지 결과를
-    덮어쓴다 (중복 행이 생기면 이후 영상의 '직전 영상' 판정이 왜곡되기 때문 — image_store와 동일).
-    경로는 image_id가 정해진 뒤에야 알 수 있으므로, 행 확보 → 경로 UPDATE 순서로 기록한다.
-    파일 저장까지 트랜잭션 안에서 수행해, 파일을 못 쓰면 DB도 함께 롤백된다.
-    avg_confidence는 미사용 방침이라 0으로 채운다 (컬럼이 NOT NULL이라 빈값 불가).
+    경로는 SAR/EO 페이지와 같은 규칙(파일명 유지)을 쓴다 — 원본은 S3 원본 풀
+    (original_image/파일명)에서 골라온 것이므로 이미 그 키에 있고, 다시 올리지 않는다.
+    결과 업로드 → DB 저장 순서라, 업로드가 실패하면 DB에는 아무것도 남지 않는다.
+    행 재사용(같은 자산·지역ID·센서·시각 덮어쓰기)은 image_store가 처리한다.
     돌려주는 값은 (image_id, 원본 상대경로, 결과 상대경로).
     """
-    with get_engine().begin() as conn:   # begin(): 성공 시 커밋, 예외 시 전체 롤백
-        # 중복 판정 키는 변화 분석의 '직전 영상' 비교 키(asset, region_id, sensor, 시각)와
-        # 반드시 같아야 한다 (image_store와 동일).
-        existing = conn.execute(
-            text(
-                f"SELECT image_id FROM `{_DB}`.`image_analysis` "
-                "WHERE asset_name = :asset_name AND region_id = :region_id "
-                "AND captured_time = :captured_time AND sensor_type = :sensor_type "
-                "ORDER BY image_id DESC LIMIT 1"
-            ),
-            {
-                "asset_name": meta["asset_name"],
-                "region_id": meta["region_id"],
-                "captured_time": meta["captured_time"],
-                "sensor_type": meta["sensor_type"],
-            },
-        ).fetchone()
+    original_rel, result_rel = image_paths_for(filename)
 
-        if existing:
-            image_id = int(existing[0])
-            conn.execute(
-                text(f"DELETE FROM `{_DB}`.`detection_result` WHERE image_id = :image_id"),
-                {"image_id": image_id},
-            )
-        else:
-            # 경로는 image_id가 나와야 알 수 있으므로 우선 빈 값으로 넣고 아래에서 채운다.
-            result = conn.execute(
-                text(
-                    f"INSERT INTO `{_DB}`.`image_analysis` "
-                    f"(asset_name, region_name, region_id, sensor_type, captured_time, "
-                    f" original_image_path, result_image_path) "
-                    f"VALUES (:asset_name, :region_name, :region_id, :sensor_type, :captured_time, "
-                    f"        '', NULL)"
-                ),
-                {
-                    "asset_name": meta["asset_name"],
-                    "region_name": meta["region_name"],
-                    "region_id": meta["region_id"],
-                    "sensor_type": meta["sensor_type"],
-                    "captured_time": meta["captured_time"],
-                },
-            )
-            image_id = int(result.lastrowid)
+    buffer = io.BytesIO()
+    annotated_image.save(buffer, format="PNG")
+    s3_store.upload_bytes(result_rel, buffer.getvalue())
 
-        original_rel, result_rel = _image_paths_for_id(image_id, original_suffix)
-        conn.execute(
-            text(
-                f"UPDATE `{_DB}`.`image_analysis` "
-                "SET region_name = :region_name, "
-                "    original_image_path = :original_path, "
-                "    result_image_path = :result_path "
-                "WHERE image_id = :image_id"
-            ),
-            {
-                "region_name": meta["region_name"],
-                "original_path": original_rel,
-                "result_path": result_rel,
-                "image_id": image_id,
-            },
-        )
-
-        for equipment_id, count in class_counts:
-            conn.execute(
-                text(
-                    f"INSERT INTO `{_DB}`.`detection_result` "
-                    f"(image_id, equipment_id, detected_count, avg_confidence, created_at) "
-                    f"VALUES (:image_id, :equipment_id, :count, 0, :created_at)"
-                ),
-                {
-                    "image_id": image_id,
-                    "equipment_id": equipment_id,
-                    "count": count,
-                    "created_at": created_at,
-                },
-            )
-
-        # 파일 저장도 트랜잭션 안에서: 여기서 실패하면 위 DB 기록도 모두 되돌아간다.
-        _ORIGINAL_DIR.mkdir(parents=True, exist_ok=True)
-        _RESULT_DIR.mkdir(parents=True, exist_ok=True)
-        if file_bytes:
-            (_PROJECT_ROOT / original_rel).write_bytes(file_bytes)
-        annotated_image.save(_PROJECT_ROOT / result_rel)
-
+    image_id = save_analysis_and_detections(
+        meta, original_rel, result_rel, class_counts, created_at
+    )
     return image_id, original_rel, result_rel
 
 
@@ -400,13 +376,8 @@ def render_db_save_section(result: InferenceResult, meta: Optional[Dict[str, Any
         except Exception:
             existing_id = None
 
-        original_suffix = Path(result.filename).suffix or ".png"
-        if existing_id is not None:
-            original_rel, result_rel = _image_paths_for_id(existing_id, original_suffix)
-        else:
-            # 새 영상은 저장 시점에 image_id가 부여되므로 자리 표시로 보여준다.
-            original_rel = f"original_image/(자동 부여 image_id){original_suffix}"
-            result_rel = "result_image/(자동 부여 image_id).png"
+        # 경로는 SAR/EO 페이지와 같은 규칙: 파일명이 그대로 S3 키가 된다.
+        original_rel, result_rel = image_paths_for(result.filename)
 
         # 1) image_analysis에 저장될 내용 미리보기 (image_id는 DB가 자동 부여하므로 표시하지 않음).
         #    오른쪽 열은 폭이 좁으므로 항목을 세로로 보여준다.
@@ -456,7 +427,7 @@ def render_db_save_section(result: InferenceResult, meta: Optional[Dict[str, Any
                 "저장하면 같은 image_id의 경로·탐지 결과를 덮어씁니다."
             )
 
-        # 3) 저장 버튼 하나로 이미지 파일 2개 + 두 테이블을 함께 저장한다.
+        # 3) 저장 버튼 하나로 결과 이미지 업로드 + 두 테이블을 함께 저장한다.
         if st.button("DB 저장", type="primary", use_container_width=True, key="eosar_db_save"):
             created_at = datetime.now()   # 버튼을 누른 시스템 시간을 created_at으로 기록
             rows = [(equipment[label], cnt) for label, cnt in sorted(matched.items())]
@@ -464,9 +435,8 @@ def render_db_save_section(result: InferenceResult, meta: Optional[Dict[str, Any
             try:
                 image_id, saved_original, saved_result = _save_all(
                     meta,
-                    st.session_state.get(_SESSION_FILE_BYTES_KEY),
+                    result.filename,
                     annotated,
-                    original_suffix,
                     rows,
                     created_at,
                 )
@@ -745,10 +715,9 @@ def _clear_saved_result() -> None:
 
 
 def _sync_saved_result_with_upload(controls: EosarControls) -> None:
-    """업로드 파일이 바뀌었는데 새 실행 전이라면 이전 결과를 숨긴다."""
-    upload_name = controls.image_file.name if controls.image_file is not None else None
+    """선택한 파일이 바뀌었는데 새 실행 전이라면 이전 결과를 숨긴다."""
     saved_upload_name = st.session_state.get(_SESSION_UPLOAD_NAME_KEY)
-    if not controls.run_clicked and upload_name != saved_upload_name:
+    if not controls.run_clicked and controls.filename != saved_upload_name:
         _clear_saved_result()
 
 
@@ -768,25 +737,23 @@ def render_eosar_page() -> None:
 
     error_message: Optional[str] = None
     if controls.run_clicked:
-        if controls.image_file is None:
-            error_message = "이미지를 업로드하세요."
-        elif controls.meta is None:
-            error_message = (
-                "파일명이 형식에 맞지 않아 어떤 모델(EO/SAR)로 탐지할지 정할 수 없습니다. "
-                "형식: 자산명_지역명_지역ID_센서_YYYY-MM-DD 시각 "
-                "(예: 425-1_개풍군_1_EO_2023-12-30 220000.png)"
-            )
+        if controls.filename is None or controls.s3_key is None:
+            error_message = "S3 원본 목록에서 이미지를 선택하세요."
         else:
             sensor = controls.meta["sensor_type"]
-            file_bytes = controls.image_file.getvalue()
             with image_col:
                 with st.spinner(f"{sensor} 모델로 추론 중입니다. CPU 환경에서는 시간이 걸릴 수 있습니다."):
                     try:
+                        # 원본을 S3에서 받아온다 (로컬 캐시에 있으면 그대로 재사용).
+                        local = s3_store.ensure_local(controls.s3_key)
+                        if local is None:
+                            raise RuntimeError(f"S3에서 원본을 받지 못했습니다: {controls.s3_key}")
+                        file_bytes = local.read_bytes()
                         if sensor == "EO":
-                            result = eo_service.run_inference(file_bytes, controls.image_file.name)
+                            result = eo_service.run_inference(file_bytes, controls.filename)
                         else:
                             result = sar_service.run_inference(
-                                file_bytes, controls.image_file.name, controls.rotate_k
+                                file_bytes, controls.filename, controls.rotate_k
                             )
                     except (eo_service.ModelUnavailableError, sar_service.ModelUnavailableError) as exc:
                         _clear_saved_result()
@@ -795,7 +762,7 @@ def render_eosar_page() -> None:
                         _clear_saved_result()
                         error_message = f"추론 실패: {exc}"
                     else:
-                        _save_result(result, sensor, controls.image_file.name, file_bytes)
+                        _save_result(result, sensor, controls.filename, file_bytes)
 
     result: Optional[InferenceResult] = st.session_state.get(_SESSION_RESULT_KEY)
     sensor: Optional[str] = st.session_state.get(_SESSION_SENSOR_KEY)
@@ -812,7 +779,7 @@ def render_eosar_page() -> None:
             if flash_message:
                 st.success(flash_message)
             selected_indices = render_detection_table(result.detections, sensor)
-            # 파일명 메타데이터로 두 테이블 + (image_id 이름의) 이미지 파일을 한 번에 저장.
+            # 파일명 메타데이터로 두 테이블 + 결과 이미지(S3)를 한 번에 저장.
             meta = parse_image_meta(result.filename)
             render_db_save_section(result, meta)
 
