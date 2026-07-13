@@ -10,7 +10,7 @@
 
 ## 1. 지도 화면 (view.py)
 
-- Google Earth Engine(Sentinel-2 true color) 배경 위에, DB `alert` 테이블에서 조회한 **가장 최신 경보 1건**만 마커로 표시.
+- Google Earth Engine(Sentinel-2 true color) 배경 위에, DB `alert` 테이블에서 조회한 **지역(region)별 가장 최신 경보 1건씩**을 마커로 표시 (지역이 여러 곳이면 마커도 여러 개).
 - 마커 색상은 경보수준(`alert_level`)에 따라 다름: 🔴 긴급(URGENT) · 🟠 중요(IMPORTANT) · 🔵 특이(NOTICE).
 - 마커에는 툴팁만 있고 팝업(클릭 시 텍스트박스)은 없음.
 - 마커를 클릭하면 `st.session_state["view"] = "detail"`로 전환되어 상세 화면으로 이동. `app.py` 메뉴에는 지도 화면("HQ Desk")만 노출되고, 상세 화면은 같은 페이지 안에서 세션 상태로만 전환되는 "숨겨진" 화면.
@@ -60,7 +60,7 @@
 
 FK 체인: `alert.change_id → change_event.change_id`, `change_event.current_image_id → image_analysis.image_id`, `image_analysis.region_id → region.region_id` (위도·경도), `change_event.equipment_id → equipment.equipment_id` (적군 장비).
 
-- `get_alerts(limit=1)` — 지도에 표시할 **가장 최신 경보 1건**만 조회 (`ORDER BY created_at DESC LIMIT 1`).
+- `get_alerts()` — 지도에 표시할 경보를 **지역(region_id)별로 가장 최신 것 1건씩** 조회 (`ROW_NUMBER() OVER (PARTITION BY region_id ORDER BY created_at DESC) = 1`). region마다 "최신 1건" 규칙 자체는 기존과 동일하고, 대상만 전체 → 지역별로 나뉨.
 - `get_alert_by_id(alert_id)` — 상세 화면용 단건 조회.
 - `Alert` dataclass에 적군 장비 관련 필드(`asset_category`, `asset_threat_level`, `asset_description`)를 추가해 `equipment` 테이블 정보까지 함께 반환.
 
