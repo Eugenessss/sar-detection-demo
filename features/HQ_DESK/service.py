@@ -16,12 +16,15 @@ alert_id로 조회되는 경보 세션(위치정보·적군자산·경보수준 
 파일명 끝의 HHMMSS(예: 100000 -> 10:00:00)를 촬영 시각 라벨로 쓴다.
 
 지도(EO 위성 배경) 생성 로직은 view.py·detail_view.py가 똑같이 쓰므로 build_eo_map()
-하나로 공용화했다. 아군 자산(아군 타격 자산)은 strike_asset 테이블에서 조회한다.
+하나로 공용화했다. 아군 자산(아군 타격 자산)은 ally_asset 테이블(부대+장비+무장 조합별
+사거리·타격반경)에서 조회하고, 적군 위치(alert에 이미 조인된 region 좌표)까지의
+직선거리를 하버사인 공식으로 계산해 사거리 충족 여부를 판정한다.
 """
 import re
 from dataclasses import dataclass
+from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import ee
 import folium
@@ -277,40 +280,60 @@ def build_eo_map(location=(38.0, 127.5), zoom_start: int = 6) -> folium.Map:
 
 
 # =====================================================================
-# 아군 자산 (strike_asset 테이블 - 타격 자산 목록)
+# 아군 자산 (ally_asset 테이블 - 부대+장비+무장 조합별 사거리·타격반경)
 # =====================================================================
+#
+# strike_asset(부대당 1행)에서 ally_asset(부대+장비+무장 조합당 1행)으로 교체.
+# 같은 부대·장비라도 무장(탄약)마다 사거리(range_km)·타격반경(effect_radius_m)이
+# 달라서, 지도에는 부대 단위로 마커 1개만 찍고 클릭 시 그 부대가 쓸 수 있는
+# 무장 옵션들을 사거리 충족 여부와 함께 보여준다.
 
 FRIENDLY_MARKER_COLOR = "cadetblue"
 FRIENDLY_MARKER_ICON = "flag"
 
-_STRIKE_ASSET_QUERY = f"""
-    SELECT asset_name, name, category, range_km, response_time_min,
-           notes, location_name, latitude, longitude
-    FROM `{_DB}`.`strike_asset`
+_EARTH_RADIUS_KM = 6371.0088  # 하버사인 공식에 쓰는 지구 평균 반지름
+
+_ALLY_ASSET_QUERY = f"""
+    SELECT asset_id, unit_name, platform_name, category, munition_name,
+           range_km, effect_radius_m, response_time_min, notes,
+           location_name, latitude, longitude
+    FROM `{_DB}`.`ally_asset`
 """
 
 
 @dataclass
-class FriendlyAsset:
-    """아군 타격 자산 하나 (부대명·자산명·종류·사거리·대응시간·위치)."""
-    asset_name: str          # 부대명 (예: 제11전투비행단)
-    name: str                # 자산명 (예: F-15K)
-    category: str            # 자산 종류 (예: 항공전력)
-    range_km: float
+class AllyAsset:
+    """아군 타격자산의 '부대+장비+무장' 조합 한 행.
+
+    distance_km/in_range는 조회 직후에는 비어 있고(None), 특정 경보(적군 위치)를
+    기준으로 evaluate_ally_assets()를 거쳐야 채워진다.
+    """
+    asset_id: int
+    unit_name: str                 # 운용부대명 (예: 제1포병여단)
+    platform_name: str             # 장비명 (예: K9A1)
+    category: str                  # 자산 종류 (예: 자주곡사포)
+    munition_name: str             # 무장/탄약 (예: 이중목적고폭탄)
+    range_km: float                # 해당 무장 기준 사거리
+    effect_radius_m: Optional[float]  # 명중 시 타격반경(m). 자료 없으면 None
     response_time_min: int
     notes: str = ""
     location_name: str = ""
     latitude: float = 0.0
     longitude: float = 0.0
+    distance_km: Optional[float] = None   # 적군 위치까지 직선거리 (평가 전엔 None)
+    in_range: Optional[bool] = None       # range_km >= distance_km 여부 (평가 전엔 None)
 
 
-def _row_to_friendly_asset(row) -> FriendlyAsset:
+def _row_to_ally_asset(row) -> AllyAsset:
     m = dict(row._mapping)
-    return FriendlyAsset(
-        asset_name=m["asset_name"],
-        name=m["name"],
+    return AllyAsset(
+        asset_id=int(m["asset_id"]),
+        unit_name=m["unit_name"],
+        platform_name=m["platform_name"],
         category=m["category"],
+        munition_name=m["munition_name"],
         range_km=float(m["range_km"]),
+        effect_radius_m=float(m["effect_radius_m"]) if m["effect_radius_m"] is not None else None,
         response_time_min=int(m["response_time_min"]),
         notes=m["notes"] or "",
         location_name=m["location_name"] or "",
@@ -319,8 +342,50 @@ def _row_to_friendly_asset(row) -> FriendlyAsset:
     )
 
 
-def get_strike_assets() -> List[FriendlyAsset]:
-    """실제 strike_asset 테이블에서 아군 타격 자산 목록을 조회한다."""
+def get_ally_assets() -> List[AllyAsset]:
+    """ally_asset 테이블에서 아군 타격자산(부대+장비+무장 조합) 전체를 조회한다."""
     with get_engine().connect() as conn:
-        rows = conn.execute(text(_STRIKE_ASSET_QUERY))
-        return [_row_to_friendly_asset(row) for row in rows]
+        rows = conn.execute(text(_ALLY_ASSET_QUERY))
+        return [_row_to_ally_asset(row) for row in rows]
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """두 좌표(위도/경도, 십진도) 사이의 직선거리를 하버사인 공식으로 계산한다 (km)."""
+    phi1, phi2 = radians(lat1), radians(lat2)
+    dphi = radians(lat2 - lat1)
+    dlambda = radians(lon2 - lon1)
+    a = sin(dphi / 2) ** 2 + cos(phi1) * cos(phi2) * sin(dlambda / 2) ** 2
+    return round(2 * _EARTH_RADIUS_KM * asin(sqrt(a)), 2)
+
+
+def evaluate_ally_assets(
+    assets: List[AllyAsset], enemy_lat: float, enemy_lon: float,
+) -> List[AllyAsset]:
+    """각 자산에 적군 위치(enemy_lat, enemy_lon)까지의 거리와 사거리 충족 여부를 채운다.
+
+    in_range는 "range_km(사거리)가 distance_km(실제 거리)를 포함하는가"
+    (range_km >= distance_km)로 판정한다.
+    """
+    for asset in assets:
+        asset.distance_km = haversine_km(enemy_lat, enemy_lon, asset.latitude, asset.longitude)
+        asset.in_range = asset.range_km >= asset.distance_km
+    return assets
+
+
+def group_ally_units(assets: List[AllyAsset]) -> List[Dict[str, Any]]:
+    """지도 마커용으로 부대(unit_name) 단위로 묶는다.
+
+    같은 부대가 여러 무장 옵션(행)을 가지고 있어도 위치는 같으므로 마커는 1개만 찍는다.
+    """
+    units: Dict[str, Dict[str, Any]] = {}
+    order: List[str] = []
+    for asset in assets:
+        if asset.unit_name not in units:
+            units[asset.unit_name] = {
+                "unit_name": asset.unit_name,
+                "platform_name": asset.platform_name,
+                "latitude": asset.latitude,
+                "longitude": asset.longitude,
+            }
+            order.append(asset.unit_name)
+    return [units[name] for name in order]
