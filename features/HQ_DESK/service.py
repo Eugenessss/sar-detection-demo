@@ -47,9 +47,9 @@ ALERT_LEVEL_COLORS = {
 }
 DEFAULT_MARKER_COLOR = "gray"  # 알 수 없는 경보수준이 들어와도 지도가 깨지지 않도록
 
-# 지도에는 전체 경보 이력이 아니라, 가장 최근에 생성된 경보 1건만 표시한다.
-# (예: alert 테이블에 행이 16개 있어도 그중 가장 최신 1개만 가져온다.)
-MAX_ALERTS_ON_MAP = 1
+# 지도에는 전체 경보 이력이 아니라, 지역(region)별로 가장 최근에 생성된 경보
+# 1건씩만 표시한다. (예: 개성시·원산시에 각각 경보가 여러 건 있어도, 지역마다
+# 최신 1건씩만 가져온다.)
 
 # 프로젝트 루트 (result_image_path 같은 DB의 상대경로를 실제 파일로 바꿀 때 기준 폴더).
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -80,16 +80,33 @@ def image_time_label(path: Path) -> str:
 
 # alert -> change_event -> image_analysis -> region / equipment 순서로 조인해
 # 지도에 필요한 값을 한 번에 가져온다. region_id가 없는 image는 자동으로 제외된다.
+# region_id·created_at은 지역별 최신 1건을 가리는 데(_LATEST_ALERTS_PER_REGION_QUERY)
+# 쓰인다.
 _ALERT_QUERY = f"""
     SELECT
-        a.alert_id, a.alert_level, a.title, a.message,
+        a.alert_id, a.alert_level, a.title, a.message, a.created_at,
         eq.class_name, eq.category AS eq_category, eq.threat_level, eq.description AS eq_description,
-        r.region_name, r.latitude, r.longitude
+        r.region_id, r.region_name, r.latitude, r.longitude
     FROM `{_DB}`.`alert` a
     JOIN `{_DB}`.`change_event` ce ON a.change_id = ce.change_id
     JOIN `{_DB}`.`image_analysis` ia ON ce.current_image_id = ia.image_id
     JOIN `{_DB}`.`region` r ON ia.region_id = r.region_id
     JOIN `{_DB}`.`equipment` eq ON ce.equipment_id = eq.equipment_id
+"""
+
+# region_id로 파티션을 나눠 alert.created_at이 가장 최근인 1건만 남긴다
+# (region마다 "최신 경보 1건" 규칙은 그대로이고, 대상이 지역별로 나뉜 것뿐).
+_LATEST_ALERTS_PER_REGION_QUERY = f"""
+    SELECT * FROM (
+        SELECT ranked.*,
+               ROW_NUMBER() OVER (
+                   PARTITION BY ranked.region_id
+                   ORDER BY ranked.created_at DESC, ranked.alert_id DESC
+               ) AS rn
+        FROM ({_ALERT_QUERY}) ranked
+    ) t
+    WHERE rn = 1
+    ORDER BY created_at DESC
 """
 
 
@@ -126,13 +143,10 @@ def _row_to_alert(row) -> Alert:
     )
 
 
-def get_alerts(limit: int = MAX_ALERTS_ON_MAP) -> List[Alert]:
-    """지도에 표시할 경보 목록을 DB에서 최신순으로 limit개만 조회한다."""
+def get_alerts() -> List[Alert]:
+    """지도에 표시할 경보 목록을 지역(region)별로 가장 최근 것 1건씩 조회한다."""
     with get_engine().connect() as conn:
-        rows = conn.execute(
-            text(_ALERT_QUERY + " ORDER BY a.created_at DESC LIMIT :limit"),
-            {"limit": limit},
-        )
+        rows = conn.execute(text(_LATEST_ALERTS_PER_REGION_QUERY))
         return [_row_to_alert(row) for row in rows]
 
 
