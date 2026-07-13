@@ -4,7 +4,7 @@
 SAR/EO 탐지 화면이 똑같이 쓰던 로직이라 shared로 올렸다 (두 화면의 복사본을 대체).
   - parse_image_meta            : "자산명_지역명_지역ID_센서_YYYY-MM-DD HHMMSS" 파일명 해석
   - image_paths_for             : 원본/결과 이미지의 저장 상대경로 생성
-  - save_analysis_and_detections: 두 테이블 저장. 같은 (자산·지역·시각·센서) 영상은
+  - save_analysis_and_detections: 두 테이블 저장. 같은 (자산·지역ID·시각·센서) 영상은
                                   기존 행을 재사용하고 탐지 결과를 덮어쓴다 (중복 행 방지)
 """
 import re
@@ -69,7 +69,7 @@ def save_analysis_and_detections(
 ) -> int:
     """image_analysis 행을 확보하고, 그 image_id로 detection_result 집계를 함께 저장한다.
 
-    같은 (자산, 지역, 촬영시각, 센서) 영상이 이미 있으면 새 행을 만들지 않고 그 image_id를
+    같은 (자산, 지역ID, 촬영시각, 센서) 영상이 이미 있으면 새 행을 만들지 않고 그 image_id를
     재사용하며, detection_result는 지우고 다시 넣는다 (재저장 = 덮어쓰기 — 중복 행이 생기면
     이후 영상의 '직전 영상' 판정이 왜곡되기 때문).
     처음 보는 영상이면 image_id는 DB가 auto_increment로 부여한다.
@@ -82,16 +82,18 @@ def save_analysis_and_detections(
     from shared.database import get_engine
 
     with get_engine().begin() as conn:   # begin(): 성공 시 커밋, 예외 시 전체 롤백
+        # 중복 판정 키는 변화 분석의 '직전 영상' 비교 키(asset, region_id, sensor, 시각)와
+        # 반드시 같아야 한다. 키가 어긋나면 중복 행이 생겨 직전 영상 판정이 왜곡된다.
         existing = conn.execute(
             text(
                 f"SELECT image_id FROM `{_DB}`.`image_analysis` "
-                "WHERE asset_name = :asset_name AND region_name = :region_name "
+                "WHERE asset_name = :asset_name AND region_id = :region_id "
                 "AND captured_time = :captured_time AND sensor_type = :sensor_type "
                 "ORDER BY image_id DESC LIMIT 1"
             ),
             {
                 "asset_name": meta["asset_name"],
-                "region_name": meta["region_name"],
+                "region_id": meta["region_id"],
                 "captured_time": meta["captured_time"],
                 "sensor_type": meta["sensor_type"],
             },
@@ -103,13 +105,13 @@ def save_analysis_and_detections(
             conn.execute(
                 text(
                     f"UPDATE `{_DB}`.`image_analysis` "
-                    "SET region_id = :region_id, "
+                    "SET region_name = :region_name, "
                     "    original_image_path = :original_path, "
                     "    result_image_path = :result_path "
                     "WHERE image_id = :image_id"
                 ),
                 {
-                    "region_id": meta["region_id"],
+                    "region_name": meta["region_name"],
                     "original_path": original_rel,
                     "result_path": result_rel,
                     "image_id": image_id,

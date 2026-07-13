@@ -248,18 +248,18 @@ def _load_equipment_ids() -> Dict[str, Any]:
 
 
 def _find_existing_image_id(meta: Dict[str, Any]) -> Optional[int]:
-    """같은 (자산, 지역, 촬영시각, 센서) 영상이 이미 등록돼 있으면 그 image_id를 돌려준다."""
+    """같은 (자산, 지역ID, 촬영시각, 센서) 영상이 이미 등록돼 있으면 그 image_id를 돌려준다."""
     with get_engine().connect() as conn:
         row = conn.execute(
             text(
                 f"SELECT image_id FROM `{_DB}`.`image_analysis` "
-                "WHERE asset_name = :asset_name AND region_name = :region_name "
+                "WHERE asset_name = :asset_name AND region_id = :region_id "
                 "AND captured_time = :captured_time AND sensor_type = :sensor_type "
                 "ORDER BY image_id DESC LIMIT 1"
             ),
             {
                 "asset_name": meta["asset_name"],
-                "region_name": meta["region_name"],
+                "region_id": meta["region_id"],
                 "captured_time": meta["captured_time"],
                 "sensor_type": meta["sensor_type"],
             },
@@ -282,7 +282,7 @@ def _save_all(
 ) -> Tuple[int, str, str]:
     """image_analysis 행을 확보해 image_id를 받고, 그 이름으로 파일을 저장하며 두 테이블을 기록한다.
 
-    같은 (자산, 지역, 촬영시각, 센서) 영상이 이미 있으면 그 행을 재사용하고 탐지 결과를
+    같은 (자산, 지역ID, 촬영시각, 센서) 영상이 이미 있으면 그 행을 재사용하고 탐지 결과를
     덮어쓴다 (중복 행이 생기면 이후 영상의 '직전 영상' 판정이 왜곡되기 때문 — image_store와 동일).
     경로는 image_id가 정해진 뒤에야 알 수 있으므로, 행 확보 → 경로 UPDATE 순서로 기록한다.
     파일 저장까지 트랜잭션 안에서 수행해, 파일을 못 쓰면 DB도 함께 롤백된다.
@@ -290,16 +290,18 @@ def _save_all(
     돌려주는 값은 (image_id, 원본 상대경로, 결과 상대경로).
     """
     with get_engine().begin() as conn:   # begin(): 성공 시 커밋, 예외 시 전체 롤백
+        # 중복 판정 키는 변화 분석의 '직전 영상' 비교 키(asset, region_id, sensor, 시각)와
+        # 반드시 같아야 한다 (image_store와 동일).
         existing = conn.execute(
             text(
                 f"SELECT image_id FROM `{_DB}`.`image_analysis` "
-                "WHERE asset_name = :asset_name AND region_name = :region_name "
+                "WHERE asset_name = :asset_name AND region_id = :region_id "
                 "AND captured_time = :captured_time AND sensor_type = :sensor_type "
                 "ORDER BY image_id DESC LIMIT 1"
             ),
             {
                 "asset_name": meta["asset_name"],
-                "region_name": meta["region_name"],
+                "region_id": meta["region_id"],
                 "captured_time": meta["captured_time"],
                 "sensor_type": meta["sensor_type"],
             },
@@ -335,13 +337,13 @@ def _save_all(
         conn.execute(
             text(
                 f"UPDATE `{_DB}`.`image_analysis` "
-                "SET region_id = :region_id, "
+                "SET region_name = :region_name, "
                 "    original_image_path = :original_path, "
                 "    result_image_path = :result_path "
                 "WHERE image_id = :image_id"
             ),
             {
-                "region_id": meta["region_id"],
+                "region_name": meta["region_name"],
                 "original_path": original_rel,
                 "result_path": result_rel,
                 "image_id": image_id,

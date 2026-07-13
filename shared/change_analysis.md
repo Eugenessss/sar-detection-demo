@@ -50,11 +50,12 @@ analyze_image_change(image_id: int) -> ChangeAnalysisOutcome
 
 먼저 `image_analysis`에서 현재 `image_id`의 정보를 가져옵니다.
 
-필요한 값은 다음입니다. (직전 이미지를 찾는 데 쓰는 3개만 조회합니다.)
+필요한 값은 다음입니다. (직전 이미지를 찾는 데 쓰는 4개만 조회합니다.)
 
 ```text
 asset_name
-region_name
+region_id
+sensor_type
 captured_time
 ```
 
@@ -62,17 +63,21 @@ captured_time
 
 ### 2. 직전 이미지 찾기
 
-같은 자산, 같은 지역에서 현재 이미지보다 촬영시각이 빠른 이미지 중 가장 최근 이미지를 찾습니다.
+같은 자산, 같은 지역(region_id), 같은 센서에서 현재 이미지보다 촬영시각이 빠른 이미지 중 가장 최근 이미지를 찾습니다.
 
 기준은 아래와 같습니다.
 
 ```text
 같은 asset_name
-같은 region_name
+같은 region_id
+같은 sensor_type
 captured_time이 현재보다 이전
 detection_result가 저장되어 있는(분석 완료된) 영상만
 가장 최근 촬영시각 1개
 ```
+
+- 지역은 이름(region_name)이 아니라 정식 키인 region_id로 비교합니다. 이름 표기가 흔들려도 같은 지역끼리만 비교되게 하기 위함입니다.
+- 센서(sensor_type)를 반드시 맞춥니다. SAR과 EO는 탐지 클래스가 완전히 달라서, 센서를 섞어 비교하면 모든 장비가 NEW/DISAPPEARED로 잡혀 가짜 경보가 발생합니다.
 
 직전 이미지가 없으면 최초 영상으로 보고 경보를 만들지 않습니다.
 

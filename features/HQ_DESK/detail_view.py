@@ -90,19 +90,23 @@ def _render_alert_photos(alert_id: int) -> None:
     """[H-4]/[H-2]/[H-Hour] 중에서 고른 사진 한 장을 3분할이던 영역만큼 크게 보여준다."""
     images = service.get_alert_images(alert_id)
     labels = ["[H-4]", "[H-2]", "[H-Hour]"]
+    # images는 오래된 순 최대 3장. 가장 최신 장이 경보 기준 시각(H-Hour)이므로
+    # 라벨 뒤쪽부터 맞춘다 — 3장 미만이면 비는 쪽은 과거 슬롯(H-4 방향)이어야 한다.
+    offset = len(labels) - len(images)
 
     state_key = f"photo_time_label_{alert_id}"
     if state_key not in st.session_state:
-        st.session_state[state_key] = labels[0]
+        st.session_state[state_key] = labels[-1]  # 기본 선택은 경보 기준 사진(H-Hour)
 
     # segmented_control은 선택 상태를 위젯 자체가 직접 관리해서, 버튼 방식처럼
     # "한 번 눌러야 상태만 바뀌고 색은 다음 클릭에야 반영되는" 딜레이가 없다.
     selected_label = st.segmented_control(
         "촬영 시각", labels, key=state_key,
     )
-    selected_idx = labels.index(selected_label) if selected_label in labels else 0
+    selected_idx = labels.index(selected_label) if selected_label in labels else len(labels) - 1
 
-    image_path = images[selected_idx] if selected_idx < len(images) else None
+    image_idx = selected_idx - offset
+    image_path = images[image_idx] if 0 <= image_idx < len(images) else None
     _render_image_slot(image_path)
 
 

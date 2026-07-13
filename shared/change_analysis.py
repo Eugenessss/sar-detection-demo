@@ -117,7 +117,7 @@ def _fetch_image(conn, image_id: int) -> Optional[Dict[str, Any]]:
     # 있어, 이 행을 잠가 같은 image_id의 분석을 한 번에 하나씩만 실행되게 한다.
     row = conn.execute(
         text(
-            f"SELECT asset_name, region_name, captured_time "
+            f"SELECT asset_name, region_id, sensor_type, captured_time "
             f"FROM `{_DB}`.`image_analysis` WHERE image_id = :image_id FOR UPDATE"
         ),
         {"image_id": image_id},
@@ -129,11 +129,16 @@ def _fetch_previous_image_id(conn, current: Dict[str, Any]) -> Optional[int]:
     # 탐지 결과가 저장된(분석 완료) 영상만 비교 기준으로 삼는다.
     # image_analysis만 있고 detection_result가 없는 빈 영상이 기준이 되면
     # 모든 장비가 NEW로 잡혀 경보가 폭주하기 때문이다.
+    # 비교 키는 (asset_name, region_id, sensor_type):
+    #  - region_id: 이름 표기가 흔들려도 같은 지역끼리만 비교되도록 정식 키를 쓴다.
+    #  - sensor_type: SAR/EO는 탐지 클래스가 완전히 달라, 센서를 섞어 비교하면
+    #    전 장비가 NEW/DISAPPEARED로 잡혀 가짜 경보가 발생한다.
     row = conn.execute(
         text(
             f"SELECT ia.image_id FROM `{_DB}`.`image_analysis` ia "
             "WHERE ia.asset_name = :asset_name "
-            "AND ia.region_name = :region_name "
+            "AND ia.region_id = :region_id "
+            "AND ia.sensor_type = :sensor_type "
             "AND ia.captured_time < :captured_time "
             f"AND EXISTS (SELECT 1 FROM `{_DB}`.`detection_result` dr "
             "WHERE dr.image_id = ia.image_id) "
@@ -141,7 +146,8 @@ def _fetch_previous_image_id(conn, current: Dict[str, Any]) -> Optional[int]:
         ),
         {
             "asset_name": current["asset_name"],
-            "region_name": current["region_name"],
+            "region_id": current["region_id"],
+            "sensor_type": current["sensor_type"],
             "captured_time": current["captured_time"],
         },
     ).fetchone()

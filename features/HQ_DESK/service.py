@@ -10,8 +10,8 @@ alert_id로 조회되는 경보 세션(위치정보·적군자산·경보수준 
   change_event.equipment_id -> equipment.equipment_id (적군자산 이름)
 
 위성사진은 alert.change_id -> change_event.current_image_id -> image_analysis 순서로
-조인해서, 같은 지역(region_id)에서 촬영된 최근 사진들 중 result_image_path가 채워진
-것만 최신 3장(H-4/H-2/H-Hour) 골라 온다. 혹시 DB에 아직 연결이 안 되어 있으면
+조인해서, 같은 지역(region_id)·같은 센서에서 촬영된 최근 사진들 중 result_image_path가
+채워진 것만 최신 3장(H-4/H-2/H-Hour) 골라 온다. 혹시 DB에 아직 연결이 안 되어 있으면
 (구버전 seed 데이터 등) 프로젝트 루트 result_image/ 폴더를 훑는 방식으로 대신한다.
 파일명 끝의 HHMMSS(예: 100000 -> 10:00:00)를 촬영 시각 라벨로 쓴다.
 
@@ -143,15 +143,18 @@ def get_alert_by_id(alert_id: int) -> Optional[Alert]:
     return _row_to_alert(row) if row else None
 
 
-# alert -> change_event -> (current_image의) region_id로, 같은 지역에서 촬영된
-# 사진들 중 result_image_path가 채워진 것만, current_image 시각 이전(포함)으로 최신
-# 3장을 가져온다. 2시간 간격 촬영이므로 이 3장이 각각 H-4/H-2/H-Hour에 해당한다.
+# alert -> change_event -> (current_image의) region_id로, 같은 지역·같은 센서에서
+# 촬영된 사진들 중 result_image_path가 채워진 것만, current_image 시각 이전(포함)으로
+# 최신 3장을 가져온다. 2시간 간격 촬영이므로 이 3장이 각각 H-4/H-2/H-Hour에 해당한다.
+# 센서를 맞추는 이유: SAR/EO는 영상 특성과 탐지 클래스가 완전히 달라, EO 경보의
+# 시계열 사이에 SAR 사진이 끼면 비교 흐름이 끊긴다 (변화 분석의 비교 키와 동일 기준).
 _ALERT_IMAGES_QUERY = f"""
     SELECT ia2.result_image_path, ia2.original_image_path, ia2.captured_time
     FROM `{_DB}`.`alert` a
     JOIN `{_DB}`.`change_event` ce ON a.change_id = ce.change_id
     JOIN `{_DB}`.`image_analysis` ia ON ce.current_image_id = ia.image_id
     JOIN `{_DB}`.`image_analysis` ia2 ON ia2.region_id = ia.region_id
+                                     AND ia2.sensor_type = ia.sensor_type
     WHERE a.alert_id = :alert_id
       AND ia2.captured_time <= ia.captured_time
       AND ia2.result_image_path IS NOT NULL
