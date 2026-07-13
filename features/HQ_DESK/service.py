@@ -11,16 +11,16 @@ alert_id로 조회되는 경보 세션(위치정보·적군자산·경보수준 
 
 위성사진은 alert.change_id -> change_event.current_image_id -> image_analysis 순서로
 조인해서, 같은 지역(region_id)·같은 센서에서 촬영된 최근 사진들 중 result_image_path가
-채워진 것만 최신 3장(H-4/H-2/H-Hour) 골라 온다. 혹시 DB에 아직 연결이 안 되어 있으면
-(구버전 seed 데이터 등) 프로젝트 루트 result_image/ 폴더를 훑는 방식으로 대신한다.
-파일명 끝의 HHMMSS(예: 100000 -> 10:00:00)를 촬영 시각 라벨로 쓴다.
+채워진 것만 최신 3장(H-4/H-2/H-Hour) 골라 온다. 파일이 이 PC에 없는 행(다른 팀원
+PC에서 저장된 영상)은 제외되며, 대체 표시는 하지 않는다 — 경보와 무관한 사진이
+시각 라벨을 달고 나오면 지휘 판단을 오도하므로, 없으면 빈 슬롯으로 보여준다.
+(과거에는 result_image/ 폴더 전체를 훑는 fallback이 있었으나 이 이유로 제거됨.)
 
 지도(EO 위성 배경) 생성 로직은 view.py·detail_view.py가 똑같이 쓰므로 build_eo_map()
 하나로 공용화했다. 아군 자산(아군 타격 자산)은 ally_asset 테이블(부대+장비+무장 조합별
 사거리·타격반경)에서 조회하고, 적군 위치(alert에 이미 조인된 region 좌표)까지의
 직선거리를 하버사인 공식으로 계산해 사거리 충족 여부를 판정한다.
 """
-import re
 from dataclasses import dataclass
 from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
@@ -54,29 +54,7 @@ DEFAULT_MARKER_COLOR = "gray"  # 알 수 없는 경보수준이 들어와도 지
 # 프로젝트 루트 (result_image_path 같은 DB의 상대경로를 실제 파일로 바꿀 때 기준 폴더).
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-# DB 연결이 안 된 구버전 alert를 위한 대체용 폴더 스캔 (프로젝트 루트 바로 아래 result_image/).
-IMAGE_ROOT_DIR = PROJECT_ROOT / "result_image"
-IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png")
 MAX_IMAGES_PER_ALERT = 3
-
-# 파일명 끝의 "HHMMSS.확장자" 부분에서 시각을 뽑아내는 정규식.
-# 예: "425-1_개풍군_1_EO_2023-12-30 100000.png" -> "100000" (10:00:00)
-_TIME_SUFFIX_RE = re.compile(r"(\d{6})\.\w+$")
-
-
-def _image_time_key(path: Path) -> str:
-    """정렬용 키: 파일명 끝의 HHMMSS. 못 찾으면 파일명 그대로를 키로 쓴다."""
-    match = _TIME_SUFFIX_RE.search(path.name)
-    return match.group(1) if match else path.name
-
-
-def image_time_label(path: Path) -> str:
-    """파일명 끝의 HHMMSS를 'HH:MM' 표시용 라벨로 바꾼다 (못 찾으면 파일명)."""
-    match = _TIME_SUFFIX_RE.search(path.name)
-    if not match:
-        return path.stem
-    hhmmss = match.group(1)
-    return f"{hhmmss[0:2]}:{hhmmss[2:4]}"
 
 # alert -> change_event -> image_analysis -> region / equipment 순서로 조인해
 # 지도에 필요한 값을 한 번에 가져온다. region_id가 없는 image는 자동으로 제외된다.
@@ -181,23 +159,12 @@ _ALERT_IMAGES_QUERY = f"""
 """
 
 
-def _scan_image_root_dir() -> List[Path]:
-    """(대체용) result_image/ 폴더를 훑어 파일명 끝 HHMMSS 순으로 최대 3장 찾는다."""
-    if not IMAGE_ROOT_DIR.is_dir():
-        return []
-    images = sorted(
-        (p for p in IMAGE_ROOT_DIR.iterdir()
-         if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS),
-        key=_image_time_key,
-    )
-    return images[:MAX_IMAGES_PER_ALERT]
-
-
 def get_alert_images(alert_id: int) -> List[Path]:
     """alert -> change_event -> image_analysis로 조인해 result_image_path를 가져온다.
 
-    DB에서 못 찾으면(과거 seed 데이터처럼 change_event가 아직 실제 사진에 연결
-    안 된 경우) result_image/ 폴더를 훑는 방식으로 대신한다.
+    이 PC에 실제 파일이 있는 것만 돌려준다 (다른 팀원 PC에서 저장된 영상은 제외).
+    부족해도 다른 사진으로 채우지 않는다 — 경보와 무관한 사진이 시각 라벨을 달고
+    보이면 오도하기 때문. 화면은 빈 슬롯을 "이미지 없음"으로 표시한다.
     """
     with get_engine().connect() as conn:
         rows = conn.execute(
@@ -215,7 +182,7 @@ def get_alert_images(alert_id: int) -> List[Path]:
         if full_path.is_file():
             images.append(full_path)
 
-    return images[:MAX_IMAGES_PER_ALERT] if images else _scan_image_root_dir()
+    return images[:MAX_IMAGES_PER_ALERT]
 
 
 def marker_color(alert_level: str) -> str:

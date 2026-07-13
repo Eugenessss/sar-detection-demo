@@ -95,7 +95,7 @@ def _render_image_slot(
     균일하게 축소되므로 (표시크기/가정촬영폭)의 고정 배율(_PX_PER_METER)로 계산할 수 있다.
     """
     if path is None or not path.exists():
-        st.info("이미지가 없습니다. (준비 중)")
+        st.info("이 시각의 이미지가 없습니다. (촬영분이 없거나, 다른 PC에서 저장되어 이 PC에 파일이 없는 경우)")
         return
 
     overlay_html = ""
