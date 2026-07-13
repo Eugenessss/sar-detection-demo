@@ -108,6 +108,7 @@ class Alert:
     title: str = ""        # 경보제목
     summary: str = ""      # 변화요약(경보 발생 근거)
     region: str = ""       # 지역
+    region_id: Optional[int] = None  # 지역 ID (상세 화면의 센서 전환에 사용)
 
 
 def _row_to_alert(row) -> Alert:
@@ -125,6 +126,7 @@ def _row_to_alert(row) -> Alert:
         title=m["title"] or "",
         summary=m["message"] or "",
         region=m["region_name"] or "",
+        region_id=int(m["region_id"]) if m["region_id"] is not None else None,
     )
 
 
@@ -141,6 +143,27 @@ def get_alerts(sensor: Optional[str] = None) -> List[Alert]:
             text(_LATEST_ALERTS_PER_REGION_QUERY.format(where=where)), params
         )
         return [_row_to_alert(row) for row in rows]
+
+
+def get_latest_alert_id(region_id: int, sensor: str) -> Optional[int]:
+    """해당 지역·센서의 최신 경보 alert_id를 돌려준다 (없으면 None).
+
+    상세 화면의 센서 전환용 — 지도의 "지역별 최신 1건" 규칙과 같은 기준
+    (created_at 최신, 동률이면 alert_id 큰 것)을 쓴다.
+    """
+    with get_engine().connect() as conn:
+        row = conn.execute(
+            text(
+                f"SELECT a.alert_id "
+                f"FROM `{_DB}`.`alert` a "
+                f"JOIN `{_DB}`.`change_event` ce ON a.change_id = ce.change_id "
+                f"JOIN `{_DB}`.`image_analysis` ia ON ce.current_image_id = ia.image_id "
+                "WHERE ia.region_id = :region_id AND ia.sensor_type = :sensor "
+                "ORDER BY a.created_at DESC, a.alert_id DESC LIMIT 1"
+            ),
+            {"region_id": region_id, "sensor": sensor},
+        ).fetchone()
+    return int(row[0]) if row else None
 
 
 def get_alert_by_id(alert_id: int) -> Optional[Alert]:

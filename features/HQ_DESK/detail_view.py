@@ -359,6 +359,26 @@ def render_alert_detail_page() -> None:
         st.warning("선택된 경보가 없습니다. 지도에서 마커를 눌러주세요.")
         return
 
+    # 센서 전환: 같은 지역의 선택 센서 최신 경보로 점프한다.
+    # 위젯 key에 alert_id를 넣어, 점프 후에는 새 경보의 센서가 선택된 상태로 그려진다.
+    chosen_sensor = st.segmented_control(
+        "센서 전환 (같은 지역의 해당 센서 최신 경보로 이동)",
+        ["EO", "SAR"],
+        default=alert.sensor_type if alert.sensor_type in ("EO", "SAR") else None,
+        key=f"detail_sensor_{alert.alert_id}",
+    )
+    if chosen_sensor and chosen_sensor != alert.sensor_type and alert.region_id is not None:
+        try:
+            other_id = service.get_latest_alert_id(alert.region_id, chosen_sensor)
+        except Exception as exc:
+            other_id = None
+            st.warning(f"센서 전환 실패: {exc}")
+        if other_id is None:
+            st.info(f"이 지역({alert.region})의 {chosen_sensor} 경보가 없습니다.")
+        elif other_id != alert.alert_id:
+            st.session_state["selected_alert_id"] = other_id
+            st.rerun()
+
     # 아군 자산(ally_asset) 조회 + 적군(alert의 region 좌표)까지 거리·사거리 충족 여부 계산.
     # 사진(가운데)에 그릴 원 목록을 먼저 정하기 위해, 컬럼을 나누기 전에 미리 계산한다.
     try:
