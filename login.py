@@ -21,10 +21,10 @@ def render_login_page() -> None:
     st.html("""
     <style>
     [data-testid="stMainBlockContainer"] {
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        min-height: 88vh;
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: center !important;
+        min-height: 88vh !important;
     }
     </style>
     """)
