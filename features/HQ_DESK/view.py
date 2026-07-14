@@ -5,7 +5,7 @@ from streamlit_folium import st_folium
 
 from features.alerts.view import render_alerts_page
 from features.HQ_DESK import detail_view, service
-from shared.ui_chrome import bracket_panel, render_command_bar
+from shared.ui_chrome import bracket_panel, floating_box, render_command_bar
 
 # 마커 클릭으로 어느 경보 좌표를 눌렀는지 판별할 때 쓰는 오차 허용치(도 단위, 약 100m).
 _CLICK_MATCH_TOLERANCE = 0.001
@@ -57,8 +57,6 @@ def _render_map(sensor: Optional[str], sensor_choice: Optional[str]) -> None:
             tooltip=f"[{level_label}·{alert.sensor_type}] {alert.asset_name}",
         )
 
-    st.caption("마커 색상: 🔴 긴급 · 🟠 중요 · 🔵 특이 (마커를 누르면 상세 화면으로 이동)")
-
     # 상세 화면에서 돌아올 때마다 key를 바꿔 지도 컴포넌트를 새로 만든다.
     # (같은 key를 계속 쓰면 이전 클릭 좌표를 계속 기억하고 있어서, 같은 마커를
     #  다시 눌러도 "새 클릭"으로 인식하지 못하는 문제가 있었다.)
@@ -102,6 +100,11 @@ def render_map_view() -> None:
             sensor = None if sensor_choice in (None, "전체") else sensor_choice
 
             _render_map(sensor, sensor_choice)
+
+            # 지도 우상단에 떠 있는 범례 박스 (마커를 누르면 상세 화면으로 이동).
+            with floating_box("hq_map_legend"):
+                st.caption("MAP LEGEND")
+                st.markdown("🔴 긴급 · 🟠 중요 · 🔵 특이")
 
     with alerts_col:
         with bracket_panel("hq_alerts_panel"):

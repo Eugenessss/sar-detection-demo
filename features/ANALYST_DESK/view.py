@@ -6,7 +6,7 @@ from streamlit_folium import st_folium
 
 from features.ANALYST_DESK import service
 from features.statistics import service as stats_service
-from shared.ui_chrome import bracket_panel, render_command_bar
+from shared.ui_chrome import bracket_panel, floating_box, render_command_bar
 
 # 마커 클릭으로 어느 경보 좌표를 눌렀는지 판별할 때 쓰는 오차 허용치(도 단위, 약 100m).
 _CLICK_MATCH_TOLERANCE = 0.001
@@ -59,8 +59,6 @@ def _render_map_column() -> None:
             tooltip=f"[{level_label}·{alert.sensor_type}] {alert.asset_name}",
         )
 
-    st.caption("마커 색상: 🔴 긴급 · 🟠 중요 · 🔵 특이 (마커를 누르면 EO/SAR 판독 페이지로 이동)")
-
     # 센서 필터를 key에 넣는다 — 필터를 바꾸면 지도를 새로 만들어, 직전 필터에서
     # 클릭했던 좌표가 남아 엉뚱한 경보로 넘어가는 것을 막는다.
     # 리셋 토큰도 넣는다 — EO/SAR로 이동했다가 상단 메뉴로 이 페이지에 돌아왔을 때
@@ -87,6 +85,11 @@ def _render_map_column() -> None:
                 st.error("EO/SAR 페이지를 찾을 수 없습니다.")
             else:
                 st.switch_page(eosar_page)
+
+    # 지도 우상단에 떠 있는 범례 박스 (마커를 누르면 EO/SAR 판독 페이지로 이동).
+    with floating_box("analyst_map_legend"):
+        st.caption("MAP LEGEND")
+        st.markdown("🔴 긴급 · 🟠 중요 · 🔵 특이")
 
 
 def _render_24h_chart(overlay_data) -> None:
