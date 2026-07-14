@@ -189,15 +189,22 @@ FK 체인: `alert.change_id → change_event.change_id`, `change_event.current_i
 ### 타격/대기 버튼 UI + 하단 로그 표 (detail_view.py)
 
 - `_render_decision_actions(alert, selected_assets)` — 3칸 레이아웃 아래(전체 폭)에 배치.
-  선택된 무장 옵션이 없으면 안내만 표시. 있으면 지휘관 ID 입력칸(로그인 기능이 없어 직접
-  입력, `st.number_input`)과 "🎯 타격"/"⏸ 대기" 버튼 두 개를 보여준다.
+  선택된 무장 옵션이 없으면 안내만 표시. 있으면 "🎯 타격"/"⏸ 대기" 버튼 두 개를 보여준다.
   - 필드 매핑: `when_text`=`alert.detected_at`(탐지시각), `where_text`=`alert.region`+좌표,
     `how_text`=선택한 자산의 `platform_name·munition_name`, `why_text`=
     `why_text_for_munition(munition_name)`. 체크된 옵션이 여러 개면 옵션마다 한 행씩 기록.
-  - **who_text(적군 부대명)**: DB에 부대명 컬럼이 따로 없어서, `service.get_latest_detected_region_name()`
-    (image_analysis에서 `created_at`이 가장 최신인 행의 `region_id` → `region.region_name`)
-    값을 대신 쓴다. 조회 실패 시 `alert.region`으로 대체한다.
+  - **who_text**: (2026-07 갱신) 로그인 기능이 추가되면서, `st.session_state["auth_user"]`
+    (로그인한 지휘관 계정, `shared/auth.py`의 `AuthUser`)의 `user_name`을 `"[이름]"` 형식으로
+    기록하도록 바꿨다 — 즉 "적군 부대명"이 아니라 **결심을 내린 지휘관의 이름**이 들어간다
+    (현재는 지휘관 계정이 `app_user.user_id=1` "최영희" 하나뿐이라 항상 `[최영희]`가
+    기록되지만, 세션 값을 그대로 쓰므로 지휘관 계정이 늘어나면 자동으로 그 사람 이름이
+    기록된다). `commander_id`도 더 이상 수동 입력(`st.number_input`)을 받지 않고
+    `auth_user.user_id`를 그대로 쓴다. 이전에 쓰던 `service.get_latest_detected_region_name()`
+    (image_analysis 최신 행 → region_name을 who_text로 쓰던 방식)은 제거했다.
   - `what_text`(적군 장비)는 적군 장비 종류(`alert.asset_category`)를 그대로 쓴다.
+  - `_render_decision_actions()`는 이제 방어적으로 `st.session_state["auth_user"]`가
+    없거나 `role != "COMMANDER"`이면 에러 메시지를 보여주고 중단한다. (app.py의 nav가
+    지휘관만 이 페이지에 접근하게 이미 막고 있어 정상 흐름에서는 발생하지 않는다.)
   - "⏸ 대기" 버튼은 요청대로 `how_text`/`why_text`만 `[대기]`로 남기고 나머지(누구/언제/
     어디서/무엇을)는 타격 버튼과 동일한 값으로 기록한다.
   - `created_at`은 버튼을 누른 시각(`datetime.now()`).

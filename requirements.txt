@@ -4,12 +4,14 @@ ultralytics>=8.2.0
 Pillow>=10.0.0
 numpy>=1.26.0
 opencv-python-headless>=4.9.0
-streamlit>=1.58.0
+# tactical_map.py의 Custom Components v2(st.components.v2)를 쓰므로 1.59 이상이 필요.
+streamlit>=1.59.0
 pandas>=2.2.0
 SQLAlchemy>=2.0.0
 PyMySQL>=1.1.0
 python-dotenv>=1.0.0
 matplotlib>=3.8.0
+altair>=5.0.0
 folium>=0.20.0
 streamlit-folium>=0.27.0
 earthengine-api>=1.7.0
