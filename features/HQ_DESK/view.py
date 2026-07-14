@@ -5,7 +5,7 @@ import streamlit as st
 from features.alerts.view import render_alerts_page
 from features.HQ_DESK import detail_view, service
 from shared import tactical_map
-from shared.ui_chrome import bracket_panel, render_command_bar
+from shared.ui_chrome import bracket_panel, render_command_bar, section_label
 
 # 지도(왼쪽) : 경보 확인 목록(오른쪽) 컬럼 폭 비율. 지도를 아주 살짝 줄이고
 # 표를 약간 키워서, "지역" 컬럼(예: 개풍군)이 한눈에 다 보이도록 한다.
@@ -71,7 +71,10 @@ def render_map_view() -> None:
             )
             sensor = None if sensor_choice in (None, "전체") else sensor_choice
 
-            # 범례는 지도 컴포넌트 자체(shared.tactical_map)가 우상단에 그린다.
+            # 범례는 지도 위에 안 띄우고, 지도 바로 위에 한 줄로 둔다.
+            section_label("Map Legend")
+            st.markdown("🔴 긴급 · 🟠 중요 · 🔵 특이 (마커를 누르면 상세 화면으로 이동)")
+
             _render_map(sensor, sensor_choice)
 
     with alerts_col:

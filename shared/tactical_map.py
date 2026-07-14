@@ -39,12 +39,6 @@ _HTML = """
   <div class="hq-frame-corner tr"></div>
   <div class="hq-frame-corner bl"></div>
   <div class="hq-frame-corner br"></div>
-  <div class="hq-legend">
-    <div class="hq-legend-label">Map Legend</div>
-    <div class="hq-legend-row"><span class="hq-sw" style="background:#ef5354;box-shadow:0 0 6px #ef5354;"></span>긴급 (클릭하면 상세로 이동)</div>
-    <div class="hq-legend-row"><span class="hq-sw" style="background:#f4a340;box-shadow:0 0 6px #f4a340;"></span>중요</div>
-    <div class="hq-legend-row"><span class="hq-sw" style="background:#3ecfc0;box-shadow:0 0 6px #3ecfc0;"></span>특이</div>
-  </div>
 </div>
 """
 
@@ -101,24 +95,6 @@ _CSS = """
   padding: 4px 7px !important;
 }
 #hq-map-root .leaflet-tooltip-top.hq-tooltip::before { border-top-color: __ACCENT__ !important; }
-
-#hq-map-root .hq-legend {
-  position: absolute; top: 12px; right: 12px; z-index: 900;
-  background: __PANEL__f5;
-  border: 1px solid __ACCENT__55;
-  padding: 10px 12px;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  color: __TEXT__;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
-  backdrop-filter: blur(4px);
-  min-width: 170px;
-}
-#hq-map-root .hq-legend-label {
-  font-size: 10px; letter-spacing: 0.16em; font-weight: 700;
-  color: __ACCENT__; text-transform: uppercase; margin-bottom: 6px;
-}
-#hq-map-root .hq-legend-row { display: flex; align-items: center; gap: 6px; font-size: 11px; margin: 3px 0; }
-#hq-map-root .hq-sw { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
 
 #hq-map-root .hq-frame-corner {
   position: absolute; width: 20px; height: 20px; z-index: 900; pointer-events: none;
