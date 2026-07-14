@@ -338,9 +338,19 @@ def apply_icon_rail_nav() -> None:
     }}
     [data-testid="stSidebarNavLink"] {{
         justify-content: center;
+        padding-top: 0.7rem !important;
+        padding-bottom: 0.7rem !important;
     }}
     [data-testid="stSidebarNavLink"] > span:last-child {{
         display: none;
+    }}
+    /* 아이콘 자체 크기 — 기본값이 라벨 옆에 붙는 걸 전제로 한 작은 크기라 좁은
+       레일에서는 너무 작아 보여서, 네비게이션/로그아웃 아이콘만 키운다. */
+    [data-testid="stSidebarNavLink"] [data-testid="stIconMaterial"] {{
+        font-size: 1.5rem !important;
+    }}
+    [data-testid="stSidebarUserContent"] [data-testid="stIconMaterial"] {{
+        font-size: 1.15rem !important;
     }}
     [data-testid="stSidebarUserContent"] {{
         padding-left: 0.35rem;
