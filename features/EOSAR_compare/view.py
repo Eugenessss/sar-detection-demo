@@ -34,7 +34,7 @@ from PIL import Image
 
 from features.sar.image import normalize_to_uint8_rgb
 from shared import s3_store
-from shared.ui_chrome import render_command_bar
+from shared.ui_chrome import bracket_panel, render_command_bar
 
 Image.MAX_IMAGE_PIXELS = None   # 대형 SAR TIF도 열 수 있도록 픽셀 수 제한 해제
 
@@ -282,7 +282,7 @@ def _collect_cells(catalog: Dict[str, Any], region: str, captured_time: datetime
 def _render_image_cell(cell: Dict[str, Any]) -> None:
     """비교 그리드의 칸 하나: 제목 → [이미지 | 메모]를 좌우로 배치해 세로 길이를 줄인다."""
     key = cell["key"]
-    with st.container(border=True):
+    with bracket_panel(f"eosar_compare_{cell['memo_key']}"):
         st.markdown(f"**{cell['title']}**")
         image_col, memo_col = st.columns([1.5, 1.0], gap="small")
 
@@ -481,7 +481,7 @@ def render_eosar_compare_page() -> None:
         st.warning("S3(original_image/·result_image/)에 비교할 이미지가 없습니다.")
         st.stop()
 
-    with st.container(border=True):
+    with bracket_panel("eosar_compare_controls_panel"):
         controls_area, button_area = st.columns([4.8, 1.2], vertical_alignment="bottom")
         with controls_area:
             selection = _render_controls(catalog)

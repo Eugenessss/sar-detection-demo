@@ -192,17 +192,38 @@ def floating_box(
 
 
 def apply_global_polish() -> None:
-    """버튼·입력창·폼·라디오 등 기본 위젯을 콘솔 톤으로 재도색한다 (위치·동작은 안 건드림).
+    """기본 위젯 전반(버튼·입력창·폼·라디오·표·알림·확장패널·탭·셀렉트 등)을 콘솔 톤으로
+    재도색하고, 페이지 배경에도 은은한 격자 텍스처를 깐다. 위치·동작은 안 건드린다.
 
     앱 진입점(app.py)에서 로그인 여부와 상관없이 한 번 호출한다. 존재하지 않는 선택자는
     그냥 무시되므로(매치 실패=아무 효과 없음) 여러 위젯 종류를 한 번에 걸어도 안전하다.
+    stSegmentedControl·stSelectbox 등 일부 testid는 stButton/stForm처럼 실제 검색으로
+    확인한 게 아니라 Streamlit의 "st+PascalCase(위젯이름)" 명명 규칙을 따른 추정값이다
+    (틀려도 그냥 그 규칙만 안 먹을 뿐 다른 규칙엔 영향 없음).
     """
     st.html(f"""
     <style>
-    /* 버튼: 호버 시 발광 테두리 */
+    /* 페이지 전체 배경에 은은한 격자 텍스처 (콘솔 화면 느낌) */
+    [data-testid="stAppViewContainer"],
+    [data-testid="stMain"] {{
+        background-image:
+            linear-gradient({_ACCENT}08 1px, transparent 1px),
+            linear-gradient(90deg, {_ACCENT}08 1px, transparent 1px);
+        background-size: 48px 48px;
+    }}
+    [data-testid="stMainBlockContainer"] {{
+        padding-top: 1.6rem !important;
+    }}
+    [data-testid="stHeader"] {{
+        background: transparent !important;
+    }}
+
+    /* 버튼: 각짐 + 호버 시 발광 테두리 */
     [data-testid="stButton"] button,
     [data-testid="stFormSubmitButton"] button,
-    [data-testid="stDownloadButton"] button {{
+    [data-testid="stDownloadButton"] button,
+    [data-testid="stBaseButton-secondary"],
+    [data-testid="stBaseButton-primary"] {{
         border-radius: 0 !important;
         transition: box-shadow 150ms ease, border-color 150ms ease;
     }}
@@ -213,7 +234,7 @@ def apply_global_polish() -> None:
         box-shadow: 0 0 10px {_ACCENT}59;
     }}
 
-    /* 입력창(텍스트/비밀번호): 다크 필드 + 포커스 시 청록 발광 */
+    /* 입력창(텍스트/비밀번호/숫자): 다크 필드 + 포커스 시 청록 발광 */
     [data-testid="stTextInput"] input,
     [data-testid="stTextArea"] textarea,
     [data-testid="stNumberInput"] input {{
@@ -227,6 +248,14 @@ def apply_global_polish() -> None:
     [data-testid="stNumberInput"] input:focus {{
         border-color: {_ACCENT} !important;
         box-shadow: 0 0 0 1px {_ACCENT}88 !important;
+    }}
+
+    /* 셀렉트박스/멀티셀렉트: 다크 필드 */
+    [data-testid="stSelectbox"] [data-baseweb="select"] > div,
+    [data-testid="stMultiSelect"] [data-baseweb="select"] > div {{
+        background: {_VOID} !important;
+        border-color: {_BORDER} !important;
+        border-radius: 0 !important;
     }}
 
     /* 폼 컨테이너: 기본 회색 박스 대신 우리 패널 톤 */
@@ -244,15 +273,48 @@ def apply_global_polish() -> None:
         color: {_FAINT} !important;
     }}
 
+    /* 세그먼트 컨트롤: 알약 모양 대신 각진 탭 형태 */
+    [data-testid="stSegmentedControl"] label {{
+        border-radius: 0 !important;
+    }}
+
     /* 표 테두리 강조 */
     [data-testid="stDataFrame"] {{
         border: 1px solid {_BORDER} !important;
     }}
 
-    /* info/warning/error 박스: 각짐 + 얇은 좌측 컬러 스트라이프만 남기고 나머지는 다크 톤 */
+    /* info/warning/error 박스: 각짐 + 다크 톤 */
     [data-testid="stAlert"] {{
         border-radius: 0 !important;
         background: {_PANEL_RAISED} !important;
+    }}
+
+    /* 확장 패널(expander): 각짐 + 우리 패널 톤 */
+    [data-testid="stExpander"] {{
+        background: {_PANEL} !important;
+        border: 1px solid {_BORDER} !important;
+        border-radius: 0 !important;
+    }}
+
+    /* 탭: 밑줄 대신 각진 하단 인디케이터 */
+    [data-testid="stTabs"] [data-baseweb="tab-border"] {{
+        background: {_BORDER} !important;
+    }}
+    [data-testid="stTabs"] [aria-selected="true"] {{
+        color: {_ACCENT} !important;
+    }}
+
+    /* 파일 업로더: 다크 드롭존 */
+    [data-testid="stFileUploaderDropzone"] {{
+        background: {_VOID} !important;
+        border: 1px dashed {_BORDER} !important;
+        border-radius: 0 !important;
+    }}
+
+    /* 진행 바: 각짐 + 청록 */
+    [data-testid="stProgress"] > div > div {{
+        background-color: {_ACCENT} !important;
+        border-radius: 0 !important;
     }}
     </style>
     """)
