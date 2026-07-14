@@ -24,6 +24,7 @@ from features.statistics.view import render_statistics_page
 from home import render_home_page
 from placeholders import render_blank_1_page
 from features.EOSAR_compare.view import render_eosar_compare_page
+from features.ANALYST_DESK.view import render_hq_desk_page as render_analyst_desk_page
 
 
 st.set_page_config(page_title="청출어람", layout="wide")
@@ -39,6 +40,7 @@ pages = [
     st.Page(render_alerts_page, title="Alerts", url_path="alerts"),
     st.Page(render_statistics_page, title="Statistics", url_path="statistics"),
     st.Page(render_hq_desk_page, title="HQ Desk", url_path="hq-desk"),
+    st.Page(render_analyst_desk_page, title="Analyst Desk", url_path="analyst-desk"),
     st.Page(render_reports_page, title="Reports", url_path="reports"),
     st.Page(render_blank_1_page, title="Blank 1", url_path="blank-1"),
 ]
