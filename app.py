@@ -29,21 +29,37 @@ from features.ANALYST_DESK.view import render_hq_desk_page as render_analyst_des
 
 st.set_page_config(page_title="청출어람", layout="wide")
 
-# 상단 메뉴에 노출할 페이지 목록. Home이 기본(접속 시 처음 보이는) 페이지다.
-pages = [
-    st.Page(render_home_page, title="Home", url_path="home", default=True),
-    st.Page(render_sar_page, title="SAR", url_path="sar"),
-    st.Page(render_eo_page, title="EO", url_path="eo"),
-    st.Page(render_eosar_page, title="EO/SAR", url_path="eosar"),
-    st.Page(render_eosar_compare_page, title="EO/SAR_COMPARE", url_path="EOSAR_compare"),
-    st.Page(render_db_page, title="DB", url_path="db"),
-    st.Page(render_alerts_page, title="Alerts", url_path="alerts"),
-    st.Page(render_statistics_page, title="Statistics", url_path="statistics"),
-    st.Page(render_hq_desk_page, title="HQ Desk", url_path="hq-desk"),
+# 상단 메뉴에 노출할 페이지. 첫 번째 Analyst Desk가 기본 화면이다.
+visible_pages = [
     st.Page(render_analyst_desk_page, title="Analyst Desk", url_path="analyst-desk"),
-    st.Page(render_reports_page, title="Reports", url_path="reports"),
-    st.Page(render_blank_1_page, title="Blank 1", url_path="blank-1"),
+    # st.Page(render_home_page, title="Home", url_path="home", default=True),
+    # st.Page(render_sar_page, title="SAR", url_path="sar"),
+    # st.Page(render_eo_page, title="EO", url_path="eo"),
+    st.Page(render_eosar_page, title="EO/SAR_detect", url_path="eosar"),
+    st.Page(render_eosar_compare_page, title="EO/SAR_compare", url_path="EOSAR_compare"),
+    # st.Page(render_db_page, title="DB", url_path="db"),
+    st.Page(render_hq_desk_page, title="Commander Desk", url_path="hq-desk"),
+    # st.Page(render_reports_page, title="Reports", url_path="reports"),
+    # st.Page(render_blank_1_page, title="Blank 1", url_path="blank-1"),
 ]
+
+# 다른 화면에서 st.switch_page()로 접근할 수 있지만 상단 메뉴에는 보이지 않는 하위 페이지.
+hidden_pages = [
+    st.Page(
+        render_alerts_page,
+        title="Alerts",
+        url_path="alerts",
+        visibility="hidden",
+    ),
+    st.Page(
+        render_statistics_page,
+        title="Statistics",
+        url_path="statistics",
+        visibility="hidden",
+    ),
+]
+
+pages = [*visible_pages, *hidden_pages]
 
 # 다른 페이지(예: HQ Desk의 경보 목록)에서 st.switch_page()로 이 페이지들로 이동할 수
 # 있도록 url_path -> StreamlitPage 매핑을 세션에 저장해둔다. callable 기반 페이지는
