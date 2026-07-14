@@ -24,6 +24,9 @@ def render_login_page() -> None:
     """
     st.html("""
     <style>
+    [data-testid="stSidebar"] {
+        display: none !important;
+    }
     .st-key-login_panel {
         position: fixed !important;
         top: 50% !important;
