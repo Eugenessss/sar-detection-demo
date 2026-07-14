@@ -23,6 +23,7 @@ from features.sar.view import render_sar_page
 from features.statistics.view import render_statistics_page
 from home import render_home_page
 from placeholders import render_blank_1_page
+from features.EOSAR_compare.view import render_eosar_compare_page
 
 
 st.set_page_config(page_title="청출어람", layout="wide")
@@ -33,6 +34,7 @@ pages = [
     st.Page(render_sar_page, title="SAR", url_path="sar"),
     st.Page(render_eo_page, title="EO", url_path="eo"),
     st.Page(render_eosar_page, title="EO/SAR", url_path="eosar"),
+    st.Page(render_eosar_compare_page, title="EO/SAR_COMPARE", url_path="EOSAR_compare"),
     st.Page(render_db_page, title="DB", url_path="db"),
     st.Page(render_alerts_page, title="Alerts", url_path="alerts"),
     st.Page(render_statistics_page, title="Statistics", url_path="statistics"),
