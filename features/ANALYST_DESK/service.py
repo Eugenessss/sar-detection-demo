@@ -30,7 +30,7 @@ import ee
 import folium
 from sqlalchemy import text
 
-from shared import s3_store
+from shared import map_theme, s3_store
 from shared.database import get_engine
 
 _DB = "satellite_intel"
@@ -250,6 +250,28 @@ def add_circle_marker(map_obj: folium.Map, latitude: float, longitude: float, co
     ).add_to(map_obj)
 
 
+# 동심원 반경(m)·불투명도 — 바깥으로 갈수록 옅어지게 해서 레이더 신호처럼 보이게 한다.
+_THREAT_RING_STEPS = [(8000, 0.55), (16000, 0.35), (26000, 0.2)]
+
+
+def add_threat_rings(map_obj: folium.Map, latitude: float, longitude: float, color: str) -> None:
+    """긴급(URGENT) 경보 마커 주위에 정적인 동심원 위협 반경을 그린다 (관제 콘솔 레이더 느낌).
+
+    애니메이션이 아니라 실제 지리 반경(Circle)이라, 지도를 줌/이동해도 항상 정확한
+    위치에 그려진다.
+    """
+    for radius_m, opacity in _THREAT_RING_STEPS:
+        folium.Circle(
+            location=[latitude, longitude],
+            radius=radius_m,
+            color=color,
+            weight=1,
+            fill=False,
+            opacity=opacity,
+            interactive=False,
+        ).add_to(map_obj)
+
+
 # =====================================================================
 # EO 위성 배경 지도 (경보 지도 화면·경보 상세 화면 공용)
 # =====================================================================
@@ -284,7 +306,10 @@ def build_eo_map(location=(40.3, 127.4), zoom_start: int = 7) -> folium.Map:
         ee.Authenticate()
         ee.Initialize(project='project-501908')
 
-    m = folium.Map(location=list(location), zoom_start=zoom_start)
+    # tiles=None + add_dark_base(): 기본 밝은 OSM 대신 관제 콘솔 톤의 어두운 베이스맵을
+    # 맨 아래에 깐다. EE 위성영상은 그 위에 오버레이로 얹힌다 (add_to() 호출 순서 = 레이어 순서).
+    m = folium.Map(location=list(location), zoom_start=zoom_start, tiles=None)
+    map_theme.add_dark_base(m)
     # zoom_start만으로는 화면 비율에 따라 북한 위쪽이 잘려 보일 수 있어서,
     # 북한 전체 범위를 명시적으로 고정한다.
     m.fit_bounds(_NORTH_KOREA_BOUNDS)
@@ -296,6 +321,7 @@ def build_eo_map(location=(40.3, 127.4), zoom_start: int = 7) -> folium.Map:
                   .median()
     vis_params = {'bands': ['B4', 'B3', 'B2'], 'min': 0, 'max': 3000}
     m.add_ee_layer(dataset, vis_params, 'Sentinel-2 (True Color)')
+    map_theme.apply_tactical_style(m)
     return m
 
 

@@ -26,9 +26,11 @@ from placeholders import render_blank_1_page
 from features.EOSAR_compare.view import render_eosar_compare_page
 from features.ANALYST_DESK.view import render_hq_desk_page as render_analyst_desk_page
 from login import render_login_page
+from shared.ui_chrome import apply_global_polish
 
 
 st.set_page_config(page_title="청출어람", layout="wide", initial_sidebar_state="expanded")
+apply_global_polish()
 
 auth_user = st.session_state.get("auth_user")
 

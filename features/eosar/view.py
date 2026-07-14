@@ -17,7 +17,7 @@ DB 저장 규칙은 SAR/EO 페이지와 동일하다 (공용 shared/image_store 
     기록한다 (업로드 실패 시 DB에 아무것도 남지 않음). 과거 image_id 이름(8199.png 등)으로
     저장된 객체는 DB가 그 경로를 기억하므로 조회에 문제없다.
 
-화면 배치 (Streamlit 기본 위젯만 사용, HTML/CSS 없음):
+화면 배치 (제목 영역만 shared.ui_chrome 커맨드바, 나머지는 Streamlit 기본 위젯):
   - 왼쪽(넓게): 이미지 영역 — 실행 전에는 ARGOS 로고, 실행 후에는 박스가 그려진 탐지 이미지.
   - 오른쪽: 입력(업로드·모델 상태·회전·실행) → 요약 → 검출 목록(편집) → DB 저장.
     이미지가 커도 DB 저장 칸이 화면 밖으로 밀려나지 않도록 오른쪽 열에 모아두었다.
@@ -47,6 +47,7 @@ from shared.alert_ui import render_change_analysis_result
 from shared.change_analysis import analyze_image_change
 from shared.database import get_engine
 from shared.image_store import image_paths_for, save_analysis_and_detections
+from shared.ui_chrome import render_command_bar
 from shared.viz import draw_boxes
 
 # EO/SAR 결과 객체를 함께 다루기 위한 타입 (필드 중 detections/elapsed_sec/filename/scene은 공통).
@@ -161,17 +162,16 @@ def parse_image_meta(filename: Optional[str]) -> Optional[Dict[str, Any]]:
 
 def _render_header() -> None:
     """로고와 제목·설명을 페이지 상단에 그린다."""
+    subtitle = "파일명의 센서 종류(EO/SAR)에 따라 알맞은 탐지 모델을 자동 선택합니다"
     logo_path = _LOGO_SMALL_PATH if _LOGO_SMALL_PATH.exists() else _LOGO_PATH
     if logo_path.exists():
         logo_col, title_col = st.columns([0.10, 0.90], vertical_alignment="center")
         with logo_col:
             st.image(str(logo_path), use_container_width=True)
         with title_col:
-            st.title("EO/SAR 통합 표적 탐지")
-            st.caption("파일명의 센서 종류(EO/SAR)에 따라 알맞은 탐지 모델을 자동 선택합니다")
+            render_command_bar("EO/SAR 통합 표적 탐지", subtitle)
     else:
-        st.title("EO/SAR 통합 표적 탐지")
-        st.caption("파일명의 센서 종류(EO/SAR)에 따라 알맞은 탐지 모델을 자동 선택합니다")
+        render_command_bar("EO/SAR 통합 표적 탐지", subtitle)
 
 
 # =====================================================================

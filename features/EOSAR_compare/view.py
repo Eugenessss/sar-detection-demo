@@ -3,7 +3,7 @@
 S3의 original_image/(원본)와 result_image/(탐지 결과) 이미지를 나란히 놓고
 같은 지역·같은 시각의 EO와 SAR을 비교 판독하는 페이지.
 
-배치 (Streamlit 기본 위젯만 사용, 페이지 자체에는 HTML/CSS 없음):
+배치 (제목 영역만 shared.ui_chrome 커맨드바, 나머지는 Streamlit 기본 위젯):
   - 상단 카드: 지역 드롭다운(개풍군/원산시) + 촬영 시각(연/월/일/시 — 시는 2시간 단위) 선택,
     맨 오른쪽에 HTML 보고서 저장 버튼. 기본값은 S3 사진 중 가장 최근 촬영 시각.
   - 본문: EO 행(원본 | 분석)을 위에, SAR 행(원본 | 분석)을 아래에 배치.
@@ -34,6 +34,7 @@ from PIL import Image
 
 from features.sar.image import normalize_to_uint8_rgb
 from shared import s3_store
+from shared.ui_chrome import render_command_bar
 
 Image.MAX_IMAGE_PIXELS = None   # 대형 SAR TIF도 열 수 있도록 픽셀 수 제한 해제
 
@@ -193,9 +194,9 @@ def _render_header() -> None:
         with logo_col:
             st.image(str(logo_path), use_container_width=True)
         with title_col:
-            st.subheader("EO/SAR 비교 분석")
+            render_command_bar("EO/SAR 비교 분석")
     else:
-        st.subheader("EO/SAR 비교 분석")
+        render_command_bar("EO/SAR 비교 분석")
 
 
 def _render_controls(catalog: Dict[str, Any]) -> Optional[Dict[str, Any]]:

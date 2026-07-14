@@ -6,6 +6,7 @@ from streamlit_folium import st_folium
 
 from features.ANALYST_DESK import service
 from features.statistics import service as stats_service
+from shared.ui_chrome import bracket_panel, render_command_bar
 
 # 마커 클릭으로 어느 경보 좌표를 눌렀는지 판별할 때 쓰는 오차 허용치(도 단위, 약 100m).
 _CLICK_MATCH_TOLERANCE = 0.001
@@ -49,9 +50,12 @@ def _render_map_column() -> None:
 
     for alert in alerts:
         level_label = service.marker_label(alert.alert_level)
+        marker_color = service.marker_color(alert.alert_level)
+        if alert.alert_level == "URGENT":
+            service.add_threat_rings(m, alert.latitude, alert.longitude, marker_color)
         service.add_circle_marker(
             m, alert.latitude, alert.longitude,
-            color=service.marker_color(alert.alert_level),
+            color=marker_color,
             tooltip=f"[{level_label}·{alert.sensor_type}] {alert.asset_name}",
         )
 
@@ -172,15 +176,17 @@ def _render_statistics_column() -> None:
 
 def render_map_view() -> None:
     """왼쪽엔 경보 지도, 오른쪽엔 최근 24시간 탐지 통계 그래프를 나란히 보여준다."""
-    st.title("영상판독관 페이지")
+    render_command_bar("영상판독관 페이지")
 
     map_col, stats_col = st.columns([1, 1], gap="large")
 
     with map_col:
-        _render_map_column()
+        with bracket_panel("analyst_map_panel"):
+            _render_map_column()
 
     with stats_col:
-        _render_statistics_column()
+        with bracket_panel("analyst_stats_panel"):
+            _render_statistics_column()
 
 
 def render_hq_desk_page() -> None:

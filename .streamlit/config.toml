@@ -1,0 +1,52 @@
+# 청출어람 — 다크 전용 "관제 콘솔(C2)" 테마.
+# 라이트 모드는 일부러 안 만든다: 이 앱은 처음부터 어두운 화면을 전제로 한
+# 콘셉트라(실제 지휘통제 콘솔처럼), [theme.light]/[theme.dark]를 나누지 않고
+# [theme] 하나만 정의해 다크 고정으로 둔다.
+[theme]
+base = "dark"
+
+primaryColor = "#3ecfc0"
+backgroundColor = "#0a0e13"
+secondaryBackgroundColor = "#10161d"
+textColor = "#dbe6ec"
+linkColor = "#3ecfc0"
+borderColor = "#223040"
+linkUnderline = false
+
+# 경보 심각도 등과 맞춘 시맨틱 컬러 (URGENT=red, IMPORTANT=orange, NOTICE=blue 등).
+redColor = "#ef5354"
+orangeColor = "#f4a340"
+yellowColor = "#f4c56b"
+greenColor = "#34d399"
+blueColor = "#3ecfc0"
+violetColor = "#8b8ff0"
+grayColor = "#7891a0"
+
+# 표(alerts 등) 헤더/테두리도 같은 톤으로.
+dataframeBorderColor = "#223040"
+dataframeHeaderBackgroundColor = "#151d26"
+
+# Altair/Vega-Lite 차트(통계 페이지 등)에도 같은 팔레트를 쓴다.
+chartCategoricalColors = ["#3ecfc0", "#f4a340", "#ef5354", "#34d399", "#8b8ff0", "#7891a0"]
+
+# 전 화면 모노스페이스 — 계기판/텔레메트리 화면다운 통일감을 위한 의도적 선택.
+font = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+baseFontSize = 14
+baseFontWeight = 400
+headingFontSizes = ["26px", "20px", "17px", "15px", "14px", "13px"]
+headingFontWeights = [700, 700, 700, 600, 600, 600]
+codeFontSize = "13px"
+
+# 각진 콘솔 느낌 — 둥근 카드 대신 각진 패널.
+baseRadius = "none"
+buttonRadius = "none"
+showWidgetBorder = true
+showSidebarBorder = true
+
+[theme.sidebar]
+backgroundColor = "#0d1319"
+secondaryBackgroundColor = "#151d26"
+textColor = "#dbe6ec"
+borderColor = "#223040"
+primaryColor = "#3ecfc0"
