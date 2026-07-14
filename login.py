@@ -29,7 +29,8 @@ def render_login_page() -> None:
         top: 50% !important;
         left: 50% !important;
         transform: translate(-50%, -50%) !important;
-        width: min(560px, 92vw) !important;
+        width: min(760px, 94vw) !important;
+        padding: 2.1rem 2.4rem !important;
         z-index: 10;
     }
     </style>
