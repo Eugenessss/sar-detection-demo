@@ -1,23 +1,25 @@
 """
 [공용 - 관제 콘솔(C2) 디자인 장식]
-.streamlit/config.toml의 다크 테마(색상·글꼴·각짐) 위에 얹는 순수 장식 요소.
-실제 위젯의 위치·동작은 건드리지 않는다 — position:fixed 같은 트릭은 쓰지 않고,
-Streamlit이 공식 지원하는 st.container(key=...) -> ".st-key-<key>" CSS 클래스만
-타겟으로 한다 (참고: streamlit 패키지 내장 테마 스킬 문서의 권장 방식).
+.streamlit/config.toml의 다크 테마(색상·글꼴·각짐) 위에 얹는 장식 요소. 실제 위젯의
+동작(클릭·입력·상태)은 건드리지 않고 시각적인 부분(색·테두리·간격·글꼴)만 다시 칠한다.
 
   render_command_bar()  : st.title() 대신 쓰는 페이지 상단 제목(브랜드+배지+아이콘+사용자정보).
-  bracket_panel()       : 모서리 브래킷 + 은은한 격자 배경이 있는 패널 컨테이너.
+  section_label()       : "MAP LEGEND" 같은 작은 대문자 라벨 (st.caption 대신).
+  bracket_panel()       : 모서리 브래킷 + 은은한 격자 배경 + 각진 테두리가 있는 패널 컨테이너.
   floating_box()        : bracket_panel() 안에서 우상단에 떠 있는 작은 정보 박스
                            (지도 위 범례 등). bracket_panel()의 with 블록 "안"에서만 쓴다
                            (그 패널의 position:relative를 기준으로 떠야 하므로).
-  apply_global_polish() : 버튼 호버 발광 등 자잘한 상호작용 강조 (앱 진입점에서 한 번).
+  apply_global_polish() : 버튼·입력창·폼·라디오 등 기본 위젯 전반을 콘솔 톤으로 재도색
+                           (앱 진입점에서 로그인 여부와 상관없이 한 번).
   apply_icon_rail_nav() : 사이드바 내비게이션을 아이콘만 보이는 좁은 레일로 만든다.
 
-apply_icon_rail_nav()이 쓰는 data-testid(stSidebar, stSidebarNavLink 등)는 Streamlit이
-문서에 공개하진 않지만, 실제 프론트엔드 번들(streamlit/static/static/js/*.js)에서 문자열
-그대로 검색해 확인한 값이다 — 이 정도는 배포판마다 고정된 빌드 산출물이라 이 버전에서는
-안정적이지만, Streamlit을 업그레이드하면 값이 바뀌어 이 함수만 조용히 무효화될 수 있다
-(에러는 안 나고 그냥 스타일이 안 먹는 정도).
+CSS가 타겟으로 삼는 선택자는 두 종류다:
+  1) st.container(key=...) -> ".st-key-<key>" : Streamlit 공식 문서에 나오는 안정적인
+     방식. bracket_panel()/floating_box()가 이 방식을 쓴다.
+  2) [data-testid="stXxx"] : Streamlit이 공식 문서화하진 않았지만, 실제 설치된
+     프론트엔드 번들(streamlit/static/static/js/*.js)에서 문자열을 직접 검색해 확인한
+     값이다. 이 정도는 배포판마다 고정된 빌드 산출물이라 이 버전에서는 안정적이지만,
+     Streamlit을 업그레이드하면 값이 바뀌어 스타일만 조용히 안 먹을 수 있다(에러는 안 남).
 
 색상 값은 .streamlit/config.toml의 팔레트와 맞춰져 있다. 팔레트를 바꾸면 두 곳 다
 같이 고쳐야 한다 (Streamlit 테마 CSS 변수명이 버전마다 달라질 수 있어 값을 직접 박아
@@ -33,6 +35,8 @@ _BORDER = "#223040"
 _TEXT = "#dbe6ec"
 _FAINT = "#46586a"
 _PANEL = "#10161d"
+_PANEL_RAISED = "#182029"
+_VOID = "#0a0e13"
 
 # 커맨드바에 쓰는 작은 장식용 아이콘 3개 (기능 없음 — 관제 콘솔 톤을 위한 순수 장식).
 _ICON_GRID = (
@@ -92,12 +96,23 @@ def render_command_bar(title: str, subtitle: str = "", badge: str = "TRAINING SY
     </div>
     """)
     if subtitle:
-        st.caption(subtitle)
+        st.html(
+            f'<div style="font-size:0.72rem;color:{_FAINT};margin-top:-0.5rem;'
+            f'margin-bottom:0.6rem;">{subtitle}</div>'
+        )
+
+
+def section_label(text: str) -> None:
+    """"MAP LEGEND"처럼 작은 대문자 라벨 한 줄을 그린다. st.caption 대신 콘솔 톤 통일용."""
+    st.html(
+        f'<div style="font-size:0.62rem;letter-spacing:0.16em;font-weight:700;'
+        f'color:{_ACCENT};text-transform:uppercase;margin-bottom:0.35rem;">{text}</div>'
+    )
 
 
 @contextlib.contextmanager
 def bracket_panel(key: str) -> Iterator[None]:
-    """모서리 브래킷 + 은은한 격자 배경이 있는 패널 컨테이너.
+    """모서리 브래킷 + 은은한 격자 배경이 있는 각진 패널 컨테이너.
 
     with 블록 안에 평소처럼 위젯을 넣으면 된다. 격자는 실제 배경(background-image)
     이라 지도 컴포넌트(iframe)처럼 위에 다른 요소가 덮이는 영역에는 안 보이고,
@@ -111,29 +126,33 @@ def bracket_panel(key: str) -> Iterator[None]:
     <style>
     .st-key-{key} {{
         position: relative;
+        background: {_PANEL} !important;
+        border: 1px solid {_BORDER} !important;
+        border-radius: 0 !important;
+        padding: 1.1rem 1.2rem !important;
         background-image:
-            linear-gradient({_ACCENT}14 1px, transparent 1px),
-            linear-gradient(90deg, {_ACCENT}14 1px, transparent 1px);
+            linear-gradient({_ACCENT}0d 1px, transparent 1px),
+            linear-gradient(90deg, {_ACCENT}0d 1px, transparent 1px);
         background-size: 36px 36px;
     }}
     .st-key-{key}::before {{
         content: "";
         position: absolute;
         top: -1px; left: -1px;
-        width: 16px; height: 16px;
+        width: 18px; height: 18px;
         border: 2px solid {_ACCENT};
         border-right: none; border-bottom: none;
-        opacity: 0.65;
+        opacity: 0.75;
         pointer-events: none;
     }}
     .st-key-{key}::after {{
         content: "";
         position: absolute;
         bottom: -1px; right: -1px;
-        width: 16px; height: 16px;
+        width: 18px; height: 18px;
         border: 2px solid {_ACCENT};
         border-left: none; border-top: none;
-        opacity: 0.65;
+        opacity: 0.75;
         pointer-events: none;
     }}
     </style>
@@ -142,7 +161,7 @@ def bracket_panel(key: str) -> Iterator[None]:
 
 @contextlib.contextmanager
 def floating_box(
-    key: str, top: str = "0.75rem", right: str = "0.75rem", width: str = "230px",
+    key: str, top: str = "0.75rem", right: str = "0.75rem", width: str = "220px",
 ) -> Iterator[None]:
     """bracket_panel() 안에서 오른쪽 위에 떠 있는 작은 정보 박스를 그린다 (지도 위 범례 등).
 
@@ -161,23 +180,30 @@ def floating_box(
         right: {right};
         width: {width};
         z-index: 20;
-        background: {_PANEL}f0;
-        backdrop-filter: blur(3px);
+        background: {_PANEL}f7 !important;
+        border: 1px solid {_ACCENT}55 !important;
+        border-radius: 0 !important;
+        padding: 0.65rem 0.8rem !important;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(4px);
     }}
     </style>
     """)
 
 
 def apply_global_polish() -> None:
-    """버튼류에 호버 시 은은한 발광 테두리를 준다. 위치·크기는 안 건드리고 색상/그림자만
-    바꾸는 순수 장식이라, 앱 진입점(app.py)에서 로그인 여부와 상관없이 한 번 불러도 된다.
-    data-testid는 Streamlit이 공식 문서화한 안정적인 선택자만 쓴다.
+    """버튼·입력창·폼·라디오 등 기본 위젯을 콘솔 톤으로 재도색한다 (위치·동작은 안 건드림).
+
+    앱 진입점(app.py)에서 로그인 여부와 상관없이 한 번 호출한다. 존재하지 않는 선택자는
+    그냥 무시되므로(매치 실패=아무 효과 없음) 여러 위젯 종류를 한 번에 걸어도 안전하다.
     """
     st.html(f"""
     <style>
+    /* 버튼: 호버 시 발광 테두리 */
     [data-testid="stButton"] button,
     [data-testid="stFormSubmitButton"] button,
     [data-testid="stDownloadButton"] button {{
+        border-radius: 0 !important;
         transition: box-shadow 150ms ease, border-color 150ms ease;
     }}
     [data-testid="stButton"] button:hover,
@@ -185,6 +211,48 @@ def apply_global_polish() -> None:
     [data-testid="stDownloadButton"] button:hover {{
         border-color: {_ACCENT} !important;
         box-shadow: 0 0 10px {_ACCENT}59;
+    }}
+
+    /* 입력창(텍스트/비밀번호): 다크 필드 + 포커스 시 청록 발광 */
+    [data-testid="stTextInput"] input,
+    [data-testid="stTextArea"] textarea,
+    [data-testid="stNumberInput"] input {{
+        background: {_VOID} !important;
+        border: 1px solid {_BORDER} !important;
+        border-radius: 0 !important;
+        color: {_TEXT} !important;
+    }}
+    [data-testid="stTextInput"] input:focus,
+    [data-testid="stTextArea"] textarea:focus,
+    [data-testid="stNumberInput"] input:focus {{
+        border-color: {_ACCENT} !important;
+        box-shadow: 0 0 0 1px {_ACCENT}88 !important;
+    }}
+
+    /* 폼 컨테이너: 기본 회색 박스 대신 우리 패널 톤 */
+    [data-testid="stForm"] {{
+        background: {_PANEL_RAISED} !important;
+        border: 1px solid {_BORDER} !important;
+        border-radius: 0 !important;
+    }}
+
+    /* 라디오/세그먼트 컨트롤 라벨: 대문자 + 자간 (콘솔 리드아웃 느낌) */
+    [data-testid="stWidgetLabel"] p {{
+        font-size: 0.68rem !important;
+        letter-spacing: 0.1em !important;
+        text-transform: uppercase !important;
+        color: {_FAINT} !important;
+    }}
+
+    /* 표 테두리 강조 */
+    [data-testid="stDataFrame"] {{
+        border: 1px solid {_BORDER} !important;
+    }}
+
+    /* info/warning/error 박스: 각짐 + 얇은 좌측 컬러 스트라이프만 남기고 나머지는 다크 톤 */
+    [data-testid="stAlert"] {{
+        border-radius: 0 !important;
+        background: {_PANEL_RAISED} !important;
     }}
     </style>
     """)

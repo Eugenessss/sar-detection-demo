@@ -5,7 +5,7 @@ from streamlit_folium import st_folium
 
 from features.alerts.view import render_alerts_page
 from features.HQ_DESK import detail_view, service
-from shared.ui_chrome import bracket_panel, floating_box, render_command_bar
+from shared.ui_chrome import bracket_panel, floating_box, render_command_bar, section_label
 
 # 마커 클릭으로 어느 경보 좌표를 눌렀는지 판별할 때 쓰는 오차 허용치(도 단위, 약 100m).
 _CLICK_MATCH_TOLERANCE = 0.001
@@ -103,7 +103,7 @@ def render_map_view() -> None:
 
             # 지도 우상단에 떠 있는 범례 박스 (마커를 누르면 상세 화면으로 이동).
             with floating_box("hq_map_legend"):
-                st.caption("MAP LEGEND")
+                section_label("Map Legend")
                 st.markdown("🔴 긴급 · 🟠 중요 · 🔵 특이")
 
     with alerts_col:
