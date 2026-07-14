@@ -34,6 +34,7 @@ def render_alerts_page(
     table_top_spacer_px: int = 0,
     level_row_spacer_px: int = 0,
     navigate_on_select_url_path: Optional[str] = None,
+    own_url_path: Optional[str] = None,
 ) -> None:
     """경보 확인 페이지 전체를 그린다.
 
@@ -45,32 +46,26 @@ def render_alerts_page(
     보여주고 fixed_levels로 고정된 등급들만 조회한다. legend_help_text가 있으면
     level_legend 바로 아래에 작은 안내 문구로 덧붙인다.
     navigate_on_select_url_path가 있으면, 행을 선택했을 때 그 자리에서 상세를 그리는
-    대신 그 url_path 페이지로 이동하며 alert_id를 쿼리 파라미터로 넘긴다 (HQ Desk의
-    축소판 목록에서 Alerts 메뉴 페이지로 넘어가 상세를 보는 용도).
+    대신 그 url_path 페이지로 이동하며 alert_id(및 own_url_path가 있으면 back_to)를
+    쿼리 파라미터로 넘긴다 (HQ Desk의 축소판 목록에서 Alerts 메뉴 페이지로 넘어가
+    상세를 보는 용도). own_url_path는 지금 이 화면 자신의 url_path로, 이동한 쪽에서
+    "돌아가기" 버튼을 이 화면으로 다시 연결하는 데 쓰인다.
     """
-    st.title("경보 확인")
-    if show_caption:
-        st.caption("판독관이 미확인 경보를 확인하고, 보고 필요 여부를 수동으로 결정합니다.")
-
     # HQ Desk 등 다른 곳에서 alert_id를 쿼리 파라미터로 넘겨 이 페이지로 이동해 온
-    # 경우, 표 선택 없이 그 경보의 상세를 바로 보여준다. navigate_on_select_url_path가
-    # 있다는 건 지금 호출된 곳이 "다른 페이지로 보내는" 축소판(예: HQ Desk 임베드)이라는
-    # 뜻이라, 정작 그 화면에서는 검사하지 않는다 — 안 그러면 alert_id 쿼리 파라미터가
-    # 페이지 전환 후에도 남아있어서, HQ Desk로 돌아왔을 때도 상세가 또 떠버린다.
+    # 경우, 판독관 전용 기능(등급/상태 필터·확인 처리·전체 표) 없이 그 경보 하나만
+    # 읽기 전용으로 보여주고 끝낸다. navigate_on_select_url_path가 있다는 건 지금
+    # 호출된 곳이 "다른 페이지로 보내는" 축소판(예: HQ Desk 임베드)이라는 뜻이라,
+    # 정작 그 화면에서는 검사하지 않는다 — 안 그러면 alert_id 쿼리 파라미터가 페이지
+    # 전환 후에도 남아있어서, HQ Desk로 돌아왔을 때도 상세가 또 떠버린다.
     if not navigate_on_select_url_path:
         focused_alert_id = st.query_params.get("alert_id")
         if focused_alert_id:
-            try:
-                focused_alert = service.fetch_alert_by_id(int(focused_alert_id))
-            except Exception as exc:
-                focused_alert = None
-                st.warning(f"경보 조회 실패: {exc}")
-            if focused_alert is not None:
-                _render_alert_detail(focused_alert)
-                st.divider()
-            # 한 번 보여준 뒤에는 지워서, 나중에 Alerts 메뉴로 다시 들어와도
-            # 예전 경보 상세가 계속 남아있지 않게 한다.
-            st.query_params.pop("alert_id", None)
+            _render_focused_alert_view(focused_alert_id)
+            return
+
+    st.title("경보 확인")
+    if show_caption:
+        st.caption("판독관이 미확인 경보를 확인하고, 보고 필요 여부를 수동으로 결정합니다.")
 
     if level_row_spacer_px:
         st.markdown(f"<div style='height:{level_row_spacer_px}px;'></div>", unsafe_allow_html=True)
@@ -128,9 +123,46 @@ def render_alerts_page(
             if target_page is None:
                 st.error(f"'{navigate_on_select_url_path}' 페이지를 찾을 수 없습니다.")
             else:
-                st.switch_page(target_page, query_params={"alert_id": str(selected["alert_id"])})
+                query_params = {"alert_id": str(selected["alert_id"])}
+                if own_url_path:
+                    query_params["back_to"] = own_url_path
+                st.switch_page(target_page, query_params=query_params)
         else:
             _render_alert_detail(selected)
+
+
+def _render_focused_alert_view(focused_alert_id: str) -> None:
+    """다른 화면(예: Commander Desk)에서 alert_id 쿼리 파라미터를 달고 넘어왔을 때,
+    판독관 전용 기능 없이 그 경보 하나만 읽기 전용으로 보여준다.
+
+    쿼리 파라미터에 back_to(원래 화면의 url_path)가 있으면 그리로 돌아가는
+    버튼도 맨 위에 둔다.
+    """
+    back_to = st.query_params.get("back_to")
+    if back_to:
+        target_page = st.session_state.get("_pages_by_url", {}).get(back_to)
+        if target_page is not None and st.button("← 돌아가기"):
+            st.query_params.clear()
+            st.switch_page(target_page)
+
+    try:
+        alert = service.fetch_alert_by_id(int(focused_alert_id))
+    except Exception as exc:
+        st.error(f"경보 조회 실패: {exc}")
+        return
+
+    if alert is None:
+        st.warning("경보를 찾을 수 없습니다.")
+        return
+
+    level_label = _LEVEL_DISPLAY.get(alert["alert_level"], alert["alert_level"])
+    st.markdown(f"### {level_label} {alert['title']}")
+    st.write(alert["message"])
+    st.caption(
+        f"{alert['asset_name']} / {alert['region_name']} / {alert['sensor_type']} | "
+        f"{alert['event_type']} {alert['previous_count']} -> {alert['current_count']} "
+        f"(delta {alert['delta_count']})"
+    )
 
 
 def _render_alert_table(

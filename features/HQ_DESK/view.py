@@ -116,6 +116,7 @@ def render_map_view() -> None:
             hidden_columns=["alert_id", "상태", "센서", "보고"],
             enable_row_selection=True,
             navigate_on_select_url_path="alerts",
+            own_url_path="hq-desk",
             table_height=_MAP_HEIGHT_PX,
             level_row_spacer_px=10,
             table_top_spacer_px=20,
