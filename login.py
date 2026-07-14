@@ -13,14 +13,24 @@ from shared.ui_chrome import bracket_panel, render_command_bar
 def render_login_page() -> None:
     """아이디/비밀번호 입력 폼을 그리고, 성공하면 세션에 로그인 사용자를 저장한다.
 
-    화면 가운데에 좁은 폭으로 띄운다 — 전체 화면 폭에 걸친 폼은 로그인 화면치고
-    너무 넓어 보여서, 컬럼으로 가운데 1/3 정도만 쓰게 잡는다.
+    화면 정중앙(가로+세로)에 좁은 폭으로 띄운다. 로그인 페이지에서만 그려지는
+    함수라, 여기서 넣는 CSS(본문 영역을 세로로 가운데 정렬)도 로그인 화면을 벗어나면
+    (즉, 이 함수가 이번 실행에서 호출 안 되면) 자동으로 같이 사라진다 — 다른
+    페이지의 레이아웃에는 영향이 없다.
     """
+    st.html("""
+    <style>
+    [data-testid="stMainBlockContainer"] {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-height: 88vh;
+    }
+    </style>
+    """)
+
     _, center_col, _ = st.columns([1, 1.1, 1])
     with center_col:
-        # 화면이 좁을 때 위쪽이 너무 붙어 보이지 않도록 약간 띄운다.
-        st.html('<div style="height:3.5rem;"></div>')
-
         with bracket_panel("login_panel"):
             render_command_bar(
                 "로그인", "분석관/지휘관 계정으로 로그인하면 역할에 맞는 화면으로 이동합니다.",

@@ -29,9 +29,10 @@ def _render_map(sensor: Optional[str], sensor_choice: Optional[str]) -> None:
         return
 
     # 경보(alert_id) 목록을 DB에서 조회해 지도에 마커로 표시.
-    # 색은 경보수준(긴급/중요/특이)에 따라 다르게 찍는다.
+    # 색은 경보수준(긴급/중요)에 따라 다르게 찍는다. 지휘관 화면은 특이(NOTICE)급은
+    # 안 쓰기로 해서, 오른쪽 경보 확인 목록(fixed_levels)과 똑같이 지도에서도 뺀다.
     try:
-        alerts = service.get_alerts(sensor)
+        alerts = [a for a in service.get_alerts(sensor) if a.alert_level != "NOTICE"]
     except Exception as exc:
         st.error(f"경보 조회 실패: {exc}")
         alerts = []
@@ -72,8 +73,9 @@ def render_map_view() -> None:
             sensor = None if sensor_choice in (None, "전체") else sensor_choice
 
             # 범례는 지도 위에 안 띄우고, 지도 바로 위에 한 줄로 둔다.
+            # 특이(NOTICE)급은 이 화면에서 안 쓰므로 범례에도 안 넣는다.
             section_label("Map Legend")
-            st.markdown("🔴 긴급 · 🟠 중요 · 🔵 특이 (마커를 누르면 상세 화면으로 이동)")
+            st.markdown("🔴 긴급 · 🟠 중요 (마커를 누르면 상세 화면으로 이동)")
 
             _render_map(sensor, sensor_choice)
 
