@@ -167,24 +167,24 @@ def render_db_save_section(result: service.EoInferenceResult, meta: Optional[Dic
         original_rel, result_rel = image_paths_for(result.filename)
 
         # 1) image_analysis에 저장될 내용 미리보기 (image_id는 DB가 자동 부여하므로 표시하지 않음).
-        st.caption("image_analysis에 저장될 내용")
-        st.dataframe(
-            pd.DataFrame(
-                [
-                    {
-                        "자산": meta["asset_name"],
-                        "지역": meta["region_name"],
-                        "region_id": meta["region_id"],
-                        "센서": meta["sensor_type"],
-                        "촬영시각": meta["captured_time"],
-                        "original_image_path": original_rel,
-                        "result_image_path": result_rel,
-                    }
-                ]
-            ),
-            use_container_width=True,
-            hide_index=True,
-        )
+        with st.expander("image_analysis에 저장될 내용", expanded=False):
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "자산": meta["asset_name"],
+                            "지역": meta["region_name"],
+                            "region_id": meta["region_id"],
+                            "센서": meta["sensor_type"],
+                            "촬영시각": meta["captured_time"],
+                            "original_image_path": original_rel,
+                            "result_image_path": result_rel,
+                        }
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
 
         # 2) detection_result에 저장될 집계 미리보기 (클래스별 개수, avg_confidence=0).
         counts = Counter(str(det["label"]) for det in result.detections)
@@ -192,20 +192,20 @@ def render_db_save_section(result: service.EoInferenceResult, meta: Optional[Dic
         matched = {label: cnt for label, cnt in counts.items() if label in equipment}
         skipped = sorted(set(counts) - set(matched))
 
-        st.caption("detection_result에 저장될 내용")
-        if matched:
-            st.dataframe(
-                pd.DataFrame(
-                    [
-                        {"클래스": label, "equipment_id": equipment[label], "수량": cnt}
-                        for label, cnt in sorted(matched.items())
-                    ]
-                ),
-                use_container_width=True,
-                hide_index=True,
-            )
-        else:
-            st.info("저장할 탐지 결과가 없습니다 (image_analysis만 저장됩니다).")
+        with st.expander("detection_result에 저장될 내용", expanded=False):
+            if matched:
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {"클래스": label, "equipment_id": equipment[label], "수량": cnt}
+                            for label, cnt in sorted(matched.items())
+                        ]
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            else:
+                st.info("저장할 탐지 결과가 없습니다 (image_analysis만 저장됩니다).")
         if skipped:
             st.warning(f"equipment에 없는 라벨은 저장에서 제외됩니다: {', '.join(skipped)}")
 
@@ -252,8 +252,8 @@ def render_db_save_section(result: service.EoInferenceResult, meta: Optional[Dic
 
 def render_detection_table(rows: List[Dict]) -> List[int]:
     """탐지된 표적 목록을 보여주고, 선택된 행의 라벨/박스 편집 UI를 제공한다."""
-    with st.container(border=True):
-        st.subheader(f"검출 목록 ({len(rows)}개)")
+    # 기본은 접힌 상태 — 저장 버튼까지의 스크롤을 줄이고, 편집할 때만 펼쳐 쓴다.
+    with st.expander(f"검출 목록 ({len(rows)}개)", expanded=False):
         selected_indices: List[int] = []
 
         if rows:
@@ -377,8 +377,11 @@ def _render_detection_editor(rows: List[Dict], selected_idx: int) -> None:
 
 
 def _render_add_detection_form(rows: List[Dict]) -> None:
-    """사용자가 새 detection 행을 추가하는 폼을 그린다 (미탐 객체를 직접 박스 치는 용도)."""
-    with st.expander("새 박스 추가", expanded=not rows):
+    """사용자가 새 detection 행을 추가하는 폼을 그린다 (미탐 객체를 직접 박스 치는 용도).
+
+    검출 목록이 expander로 바뀌면서 (expander 중첩 불가) 이 폼은 popover로 연다.
+    """
+    with st.popover("새 박스 추가", use_container_width=True):
         with st.form("eo_add_detection_form"):
             new_label = st.selectbox("label", options=_EO_LABELS)
             coord_cols = st.columns(4)

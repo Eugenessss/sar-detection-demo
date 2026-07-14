@@ -22,6 +22,7 @@ DB 저장 규칙은 SAR/EO 페이지와 동일하다 (공용 shared/image_store 
   - 오른쪽: 입력(업로드·모델 상태·회전·실행) → 요약 → 검출 목록(편집) → DB 저장.
     이미지가 커도 DB 저장 칸이 화면 밖으로 밀려나지 않도록 오른쪽 열에 모아두었다.
 """
+import base64
 import io
 import re
 from collections import Counter
@@ -35,6 +36,9 @@ import streamlit as st
 from sqlalchemy import text
 
 from features.eo import service as eo_service
+# 보고서 양식·조회는 Reports 페이지 모듈을 그대로 재사용한다 (양식을 한 곳에서만 관리).
+from features.reports import report as analysis_report
+from features.reports import repository as reports_repository
 from features.eo.loader import load_eo_models
 from features.sar import service as sar_service
 from features.sar.loader import load_sar_models
@@ -221,8 +225,17 @@ def _list_s3_originals() -> Dict[str, Any]:
     return {"items": items, "error": None}
 
 
+# 파일명 클릭으로 고른 원본을 rerun 사이에 기억하는 세션 키 ({"name":…, "key":…}).
+_SESSION_S3_SELECTED_KEY = "eosar_selected_s3_original"
+
+
 def render_controls() -> EosarControls:
-    """입력 카드: S3 원본 선택·모델 상태·(SAR일 때) 회전·실행 버튼을 세로로 그린다."""
+    """입력 영역을 두 카드로 그린다: ① 데이터 및 이미지 선택 ② 일일 체크리스트.
+
+    원본 선택은 스크롤 목록에서 파일명 버튼을 클릭하는 방식이다. 선택하면 왼쪽
+    패널에 원본 미리보기가 뜨고, 실행을 누르면 탐지 결과 이미지로 바뀐다.
+    """
+    # ① 데이터 및 이미지 선택 카드
     with st.container(border=True):
         st.subheader("데이터 및 이미지 선택")
 
@@ -231,7 +244,7 @@ def render_controls() -> EosarControls:
             st.error(f"S3 목록 조회 실패: {listing['error']}")
         items = listing["items"]
 
-        refresh_col, count_col = st.columns([0.4, 0.6], vertical_alignment="center")
+        refresh_col, count_col = st.columns([0.35, 0.65], vertical_alignment="center")
         with refresh_col:
             if st.button("목록 새로고침", use_container_width=True):
                 _list_s3_originals.clear()
@@ -240,13 +253,31 @@ def render_controls() -> EosarControls:
             waiting = sum(1 for item in items if not item["analyzed"])
             st.caption(f"원본 {len(items)}개 (분석 대기 {waiting}개)")
 
-        selected = st.selectbox(
-            "S3 원본 이미지 (original_image/)",
-            options=items,
-            index=None,
-            placeholder="분석할 이미지를 선택하세요",
-            format_func=lambda item: f"{item['name']}  ·  {'분석됨' if item['analyzed'] else '대기'}",
-        )
+        # 선택 상태는 세션에 기억한다. 목록에서 사라진 파일(삭제/이름변경)이면 선택 해제.
+        selected: Optional[Dict[str, Any]] = st.session_state.get(_SESSION_S3_SELECTED_KEY)
+        if selected is not None and all(item["key"] != selected["key"] for item in items):
+            selected = None
+            st.session_state.pop(_SESSION_S3_SELECTED_KEY, None)
+
+        # 파일명을 그대로 버튼으로 나열한다 — 클릭하면 선택되고, 선택된 것은 강조색.
+        if items:
+            with st.container(height=240, border=True):
+                for item in items:
+                    is_selected = selected is not None and item["key"] == selected["key"]
+                    label = f"{item['name']}  ·  {'분석됨' if item['analyzed'] else '대기'}"
+                    if st.button(
+                        label,
+                        key=f"eosar_s3_item_{item['key']}",
+                        type="primary" if is_selected else "secondary",
+                        use_container_width=True,
+                    ):
+                        st.session_state[_SESSION_S3_SELECTED_KEY] = {
+                            "name": item["name"], "key": item["key"],
+                        }
+                        st.rerun()
+        else:
+            st.info("S3 original_image/에 분석 가능한 원본이 없습니다.")
+
         filename = selected["name"] if selected else None
         s3_key = selected["key"] if selected else None
 
@@ -254,7 +285,7 @@ def render_controls() -> EosarControls:
         meta = parse_image_meta(filename) if filename else None
 
         if filename is None:
-            st.caption("파일명의 센서 종류(EO/SAR)에 맞는 탐지 모델을 자동 선택합니다.")
+            st.caption("파일명을 클릭해 이미지를 선택하면 원본 미리보기와 모델 상태가 표시됩니다.")
         else:
             sensor = meta["sensor_type"]
             loader = load_eo_models if sensor == "EO" else load_sar_models
@@ -285,6 +316,30 @@ def render_controls() -> EosarControls:
         rotate_k=rotate_k,
         run_clicked=run_clicked,
     )
+
+
+# 일일 체크리스트: 판독관의 하루 업무 3단계로 고정 (판독 → 경보 → 보고).
+# 각 항목은 이 시스템의 실제 기능과 1:1로 대응한다 — 신규 영상 판독(아래 원본 목록의
+# '대기' 소화), 미확인 경보 처리(Alerts 페이지), 분석 보고서 작성(아래 보고서 카드).
+# 체크 상태는 세션(위젯 상태)에만 저장되어 새로고침 시 초기화된다.
+_DAILY_CHECKLIST_ITEMS = ["신규 영상 판독", "미확인 경보 처리", "분석 보고서 작성"]
+
+
+def render_daily_checklist_bar() -> None:
+    """페이지 맨 위 가로 한 줄 체크리스트 바: 고정 3개 항목 + 진행 현황."""
+    with st.container(border=True):
+        head_col, body_col = st.columns([0.22, 0.78], vertical_alignment="center")
+
+        # 체크박스를 먼저 그려 완료 수를 얻고, 왼쪽 제목에 진행 현황을 표시한다.
+        with body_col:
+            item_cols = st.columns(len(_DAILY_CHECKLIST_ITEMS), vertical_alignment="center")
+            checked = []
+            for idx, (col, item) in enumerate(zip(item_cols, _DAILY_CHECKLIST_ITEMS)):
+                with col:
+                    checked.append(st.checkbox(item, key=f"eosar_daily_chk_{idx}"))
+
+        with head_col:
+            st.markdown(f"**일일 체크리스트 ({sum(checked)}/{len(checked)})**")
 
 
 # =====================================================================
@@ -381,7 +436,7 @@ def render_db_save_section(result: InferenceResult, meta: Optional[Dict[str, Any
 
         # 1) image_analysis에 저장될 내용 미리보기 (image_id는 DB가 자동 부여하므로 표시하지 않음).
         #    오른쪽 열은 폭이 좁으므로 항목을 세로로 보여준다.
-        with st.expander("image_analysis에 저장될 내용", expanded=True):
+        with st.expander("image_analysis에 저장될 내용", expanded=False):
             st.dataframe(
                 pd.DataFrame(
                     [
@@ -404,7 +459,7 @@ def render_db_save_section(result: InferenceResult, meta: Optional[Dict[str, Any
         matched = {label: cnt for label, cnt in counts.items() if label in equipment}
         skipped = sorted(set(counts) - set(matched))
 
-        with st.expander("detection_result에 저장될 내용", expanded=True):
+        with st.expander("detection_result에 저장될 내용", expanded=False):
             if matched:
                 st.dataframe(
                     pd.DataFrame(
@@ -454,6 +509,102 @@ def render_db_save_section(result: InferenceResult, meta: Optional[Dict[str, Any
 
 
 # =====================================================================
+# 3.5) 보고서 — 저장된 영상의 분석 보고서(HTML)를 이 화면에서 바로 다운로드
+# =====================================================================
+
+def _report_bytes_for(image_id: int) -> Tuple[str, bytes]:
+    """image_id의 분석 보고서 HTML을 만들어 (파일명, 파일 내용)으로 돌려준다.
+
+    조회·양식은 Reports 페이지 모듈을 재사용하고, 결과 이미지는 S3에서 받아
+    (로컬 캐시) base64로 임베드한다 — 보고서 파일 하나로 어디서든 열리게.
+    """
+    info = reports_repository.fetch_image_detail(image_id)
+    if info is None:
+        raise ValueError(f"image_id={image_id} 영상을 찾을 수 없습니다.")
+    detections = reports_repository.fetch_detections(image_id)
+
+    image_b64 = None
+    local = s3_store.ensure_local(str(info.get("result_image_path") or ""))
+    if local is not None:
+        image_b64 = base64.b64encode(local.read_bytes()).decode("ascii")
+
+    html = analysis_report.build_analysis_report(info, detections, image_b64)
+    return f"분석보고서_{image_id}.html", html.encode("utf-8")
+
+
+def _past_image_label(row: Dict[str, Any]) -> str:
+    """과거 분석 목록 selectbox에 보여줄 한 줄 요약."""
+    return (
+        f"#{row['image_id']} · {row['asset_name']} · {row['region_name']} · "
+        f"{row['sensor_type']} · {row['captured_time']}"
+    )
+
+
+def render_report_section(meta: Optional[Dict[str, Any]]) -> None:
+    """보고서 카드: 현재 영상 보고서 다운로드 + 과거 분석 보고서 선택 다운로드.
+
+    보고서는 DB 데이터로 생성하므로, 현재 영상은 'DB 저장 후'에만 활성화된다
+    (편집 중인 미확정 검출 목록과 보고서 내용이 어긋나는 것을 막기 위함).
+    """
+    with st.container(border=True):
+        st.subheader("보고서")
+
+        # 1) 현재 영상 — 저장돼 있어야(image_id 존재) 생성 가능.
+        image_id: Optional[int] = None
+        if meta is not None:
+            try:
+                image_id = _find_existing_image_id(meta)
+            except Exception:
+                image_id = None
+
+        if image_id is None:
+            st.button(
+                "현재 영상 보고서 다운로드", disabled=True, type="primary",
+                use_container_width=True, key="eosar_report_current_disabled",
+            )
+            st.caption("DB 저장 후 생성할 수 있습니다.")
+        else:
+            try:
+                file_name, data = _report_bytes_for(image_id)
+            except Exception as exc:
+                st.warning(f"보고서 생성 실패: {exc}")
+            else:
+                st.download_button(
+                    "현재 영상 보고서 다운로드",
+                    data=data, file_name=file_name, mime="text/html", type="primary",
+                    use_container_width=True, key="eosar_report_current",
+                )
+
+        # 2) 과거 분석 — 최근 영상 목록에서 골라 그 시점 DB 기준으로 재생성.
+        with st.expander("과거 분석 보고서", expanded=False):
+            try:
+                items = reports_repository.fetch_image_list(None, 200)
+            except Exception as exc:
+                st.warning(f"과거 분석 목록 조회 실패: {exc}")
+                items = []
+
+            selected = st.selectbox(
+                "영상 선택 (최근 200건)",
+                options=items,
+                index=None,
+                placeholder="보고서를 만들 영상을 선택하세요",
+                format_func=_past_image_label,
+                key="eosar_report_past_select",
+            )
+            if selected is not None:
+                try:
+                    file_name, data = _report_bytes_for(int(selected["image_id"]))
+                except Exception as exc:
+                    st.warning(f"보고서 생성 실패: {exc}")
+                else:
+                    st.download_button(
+                        "선택 영상 보고서 다운로드",
+                        data=data, file_name=file_name, mime="text/html", type="primary",
+                        use_container_width=True, key="eosar_report_past",
+                    )
+
+
+# =====================================================================
 # 4) 결과 표시 — 검출 목록의 선택/수정/삭제/추가는 기존 두 페이지와 동일
 # =====================================================================
 
@@ -473,8 +624,8 @@ def render_run_summary(result: InferenceResult, sensor: str) -> None:
 
 def render_detection_table(rows: List[Dict], sensor: str) -> List[int]:
     """탐지된 표적 목록을 보여주고, 선택된 행의 라벨/박스 편집 UI를 제공한다."""
-    with st.container(border=True):
-        st.subheader(f"검출 목록 ({len(rows)}개)")
+    # 기본은 접힌 상태 — 저장 버튼까지의 스크롤을 줄이고, 편집할 때만 펼쳐 쓴다.
+    with st.expander(f"검출 목록 ({len(rows)}개)", expanded=False):
         selected_indices: List[int] = []
 
         if rows:
@@ -601,8 +752,9 @@ def _render_add_detection_form(rows: List[Dict], sensor: str) -> None:
     """사용자가 새 detection 행을 추가하는 폼을 그린다 (미탐 객체를 직접 박스 치는 용도).
 
     라벨 입력 방식은 각 센서의 기존 페이지와 같다: EO는 선택 목록, SAR은 직접 입력.
+    검출 목록이 expander로 바뀌면서 (expander 중첩 불가) 이 폼은 popover로 연다.
     """
-    with st.expander("새 박스 추가", expanded=not rows):
+    with st.popover("새 박스 추가", use_container_width=True):
         with st.form("eosar_add_detection_form"):
             if sensor == "EO":
                 new_label = st.selectbox("label", options=_EO_LABELS)
@@ -682,7 +834,32 @@ def render_placeholder_panel() -> None:
             _, middle, _ = st.columns([1, 3, 1])
             with middle:
                 st.image(str(_LOGO_PATH), use_container_width=True)
-        st.info("오른쪽에서 이미지를 업로드하고 실행하면 탐지 결과가 여기에 표시됩니다.")
+        st.info("오른쪽 목록에서 파일명을 클릭하면 원본이, 실행을 누르면 탐지 결과가 여기에 표시됩니다.")
+
+
+def _render_original_preview(filename: Optional[str], s3_key: str) -> None:
+    """파일을 골라둔(아직 실행 전) 상태에서 왼쪽에 원본 이미지를 미리 보여준다.
+
+    S3에서 받아(로컬 캐시 재사용) 표시한다. TIF 등 브라우저가 직접 못 여는 형식도
+    PIL로 열어서 넘기므로 문제없다.
+    """
+    with st.container(border=True):
+        st.subheader("탐지 결과")
+        st.caption(f"원본 미리보기: {filename} — 실행을 누르면 탐지 결과로 바뀝니다.")
+        local = s3_store.ensure_local(s3_key)
+        if local is None:
+            st.warning("S3에서 원본을 받지 못했습니다. 목록을 새로고침해 보세요.")
+            return
+        try:
+            from PIL import Image
+
+            image = Image.open(local)
+            image.load()
+            if image.mode not in ("RGB", "RGBA", "L"):
+                image = image.convert("RGB")   # 16비트 TIF 등은 표시 가능한 모드로 변환
+            st.image(image, use_container_width=True)
+        except Exception as exc:
+            st.warning(f"원본 미리보기 실패: {exc}")
 
 
 # =====================================================================
@@ -728,8 +905,9 @@ def _sync_saved_result_with_upload(controls: EosarControls) -> None:
 def render_eosar_page() -> None:
     """EO/SAR 통합 탐지 페이지 전체를 그린다: 입력 받기 → 센서별 추론 → 결과 표시 → DB 저장."""
     _render_header()
+    render_daily_checklist_bar()
 
-    image_col, side_col = st.columns([0.56, 0.44], gap="large")
+    image_col, side_col = st.columns([0.56, 0.44], gap="small")
 
     with side_col:
         controls = render_controls()
@@ -782,10 +960,15 @@ def render_eosar_page() -> None:
             # 파일명 메타데이터로 두 테이블 + 결과 이미지(S3)를 한 번에 저장.
             meta = parse_image_meta(result.filename)
             render_db_save_section(result, meta)
+            # 저장된 영상은 같은 화면에서 바로 보고서를 뽑을 수 있다 (+ 과거 분석 재생성).
+            render_report_section(meta)
 
-    # 왼쪽 열: 실행 전에는 ARGOS 로고, 실행 후에는 탐지 이미지.
+    # 왼쪽 열: 실행 후에는 탐지 결과 이미지, 파일만 골라둔 상태면 원본 미리보기,
+    # 아무것도 선택 안 했으면 ARGOS 로고.
     with image_col:
-        if result is None or sensor is None:
-            render_placeholder_panel()
-        else:
+        if result is not None and sensor is not None:
             render_image_panel(result, selected_indices)
+        elif controls.s3_key is not None:
+            _render_original_preview(controls.filename, controls.s3_key)
+        else:
+            render_placeholder_panel()
