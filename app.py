@@ -41,5 +41,11 @@ pages = [
     st.Page(render_blank_1_page, title="Blank 1", url_path="blank-1"),
 ]
 
+# 다른 페이지(예: HQ Desk의 경보 목록)에서 st.switch_page()로 이 페이지들로 이동할 수
+# 있도록 url_path -> StreamlitPage 매핑을 세션에 저장해둔다. callable 기반 페이지는
+# 파일 경로가 아니라 st.navigation에 등록된 이 StreamlitPage 객체 자체가 있어야
+# st.switch_page로 이동할 수 있다.
+st.session_state["_pages_by_url"] = {p.url_path: p for p in pages}
+
 current_page = st.navigation(pages, position="top")
 current_page.run()

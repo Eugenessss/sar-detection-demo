@@ -3,23 +3,95 @@
 판독관이 alert 테이블의 경보를 확인하고, 필요 시 보고서 초안을 직접 생성하는 페이지.
 경보 분류는 change_analysis.py가 만들고, 이 화면은 조회/확인/보고 필요 판단만 담당한다.
 """
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Sequence, Union
 
 import pandas as pd
 import streamlit as st
 
 from features.alerts import service
 
+# alert_level(enum 원본값) -> 표에 보여줄 색상 마커(텍스트 없이 마커만).
+_LEVEL_DISPLAY = {
+    "URGENT": "🔴",
+    "IMPORTANT": "🟠",
+    "NOTICE": "🔵",
+}
 
-def render_alerts_page() -> None:
-    """경보 확인 페이지 전체를 그린다."""
+
+def render_alerts_page(
+    *,
+    show_caption: bool = True,
+    show_level_filter: bool = True,
+    level_options: Optional[List[str]] = None,
+    level_legend: Optional[str] = None,
+    legend_help_text: Optional[str] = None,
+    fixed_levels: Optional[Sequence[str]] = None,
+    show_status_filter: bool = True,
+    show_mark_all_button: bool = True,
+    hidden_columns: Optional[List[str]] = None,
+    enable_row_selection: bool = True,
+    table_height: Optional[int] = None,
+    table_top_spacer_px: int = 0,
+    level_row_spacer_px: int = 0,
+    navigate_on_select_url_path: Optional[str] = None,
+) -> None:
+    """경보 확인 페이지 전체를 그린다.
+
+    HQ Desk 화면 오른쪽에 축소판으로 재사용할 수 있도록 옵션을 받는다
+    (옵션을 안 주면 Alerts 메뉴 페이지와 동일한 전체 기능). *_spacer_px 값들은 옆
+    (HQ Desk 지도 쪽) 요소들과 높이를 맞추기 위한 여백으로, level_row_spacer_px는
+    "경보 등급" 줄 위, table_top_spacer_px는 표 위에 들어간다.
+    show_level_filter=False면 등급을 고를 수 있는 라디오 대신, level_legend 문구를
+    보여주고 fixed_levels로 고정된 등급들만 조회한다. legend_help_text가 있으면
+    level_legend 바로 아래에 작은 안내 문구로 덧붙인다.
+    navigate_on_select_url_path가 있으면, 행을 선택했을 때 그 자리에서 상세를 그리는
+    대신 그 url_path 페이지로 이동하며 alert_id를 쿼리 파라미터로 넘긴다 (HQ Desk의
+    축소판 목록에서 Alerts 메뉴 페이지로 넘어가 상세를 보는 용도).
+    """
     st.title("경보 확인")
-    st.caption("판독관이 미확인 경보를 확인하고, 보고 필요 여부를 수동으로 결정합니다.")
+    if show_caption:
+        st.caption("판독관이 미확인 경보를 확인하고, 보고 필요 여부를 수동으로 결정합니다.")
 
-    level = st.radio("경보 등급", ["전체", "URGENT", "IMPORTANT", "NOTICE"], horizontal=True)
-    status = st.radio("처리 상태", ["NEW", "CHECKED", "전체"], horizontal=True)
-    level_filter: Optional[str] = None if level == "전체" else level
-    status_filter: Optional[str] = None if status == "전체" else status
+    # HQ Desk 등 다른 곳에서 alert_id를 쿼리 파라미터로 넘겨 이 페이지로 이동해 온
+    # 경우, 표 선택 없이 그 경보의 상세를 바로 보여준다. navigate_on_select_url_path가
+    # 있다는 건 지금 호출된 곳이 "다른 페이지로 보내는" 축소판(예: HQ Desk 임베드)이라는
+    # 뜻이라, 정작 그 화면에서는 검사하지 않는다 — 안 그러면 alert_id 쿼리 파라미터가
+    # 페이지 전환 후에도 남아있어서, HQ Desk로 돌아왔을 때도 상세가 또 떠버린다.
+    if not navigate_on_select_url_path:
+        focused_alert_id = st.query_params.get("alert_id")
+        if focused_alert_id:
+            try:
+                focused_alert = service.fetch_alert_by_id(int(focused_alert_id))
+            except Exception as exc:
+                focused_alert = None
+                st.warning(f"경보 조회 실패: {exc}")
+            if focused_alert is not None:
+                _render_alert_detail(focused_alert)
+                st.divider()
+            # 한 번 보여준 뒤에는 지워서, 나중에 Alerts 메뉴로 다시 들어와도
+            # 예전 경보 상세가 계속 남아있지 않게 한다.
+            st.query_params.pop("alert_id", None)
+
+    if level_row_spacer_px:
+        st.markdown(f"<div style='height:{level_row_spacer_px}px;'></div>", unsafe_allow_html=True)
+
+    level_filter: Optional[Union[str, Sequence[str]]]
+    if show_level_filter:
+        level = st.radio(
+            "경보 등급", level_options or ["전체", "URGENT", "IMPORTANT", "NOTICE"], horizontal=True,
+        )
+        level_filter = None if level == "전체" else level
+    else:
+        if level_legend:
+            st.caption(level_legend)
+        if legend_help_text:
+            st.caption(legend_help_text)
+        level_filter = fixed_levels
+
+    status_filter: Optional[str] = None
+    if show_status_filter:
+        status = st.radio("처리 상태", ["NEW", "CHECKED", "전체"], horizontal=True)
+        status_filter = None if status == "전체" else status
 
     try:
         alerts = service.fetch_alerts(level_filter, status_filter)
@@ -31,39 +103,84 @@ def render_alerts_page() -> None:
         st.info("조회 조건에 맞는 경보가 없습니다.")
         return
 
-    if st.button("미확인 경보 모두 확인 처리", use_container_width=True):
-        try:
-            updated = service.mark_all_checked()
-        except Exception as exc:
-            st.error(f"전체 확인 처리 실패: {exc}")
-        else:
-            st.success(f"{updated}건 확인 처리했습니다.")
-            st.rerun()
+    if show_mark_all_button:
+        if st.button("미확인 경보 모두 확인 처리", use_container_width=True):
+            try:
+                updated = service.mark_all_checked()
+            except Exception as exc:
+                st.error(f"전체 확인 처리 실패: {exc}")
+            else:
+                st.success(f"{updated}건 확인 처리했습니다.")
+                st.rerun()
 
-    selected = _render_alert_table(alerts)
+    if table_top_spacer_px:
+        st.markdown(f"<div style='height:{table_top_spacer_px}px;'></div>", unsafe_allow_html=True)
+
+    selected = _render_alert_table(
+        alerts,
+        hidden_columns=hidden_columns,
+        enable_selection=enable_row_selection,
+        height=table_height,
+    )
     if selected is not None:
-        _render_alert_detail(selected)
+        if navigate_on_select_url_path:
+            target_page = st.session_state.get("_pages_by_url", {}).get(navigate_on_select_url_path)
+            if target_page is None:
+                st.error(f"'{navigate_on_select_url_path}' 페이지를 찾을 수 없습니다.")
+            else:
+                st.switch_page(target_page, query_params={"alert_id": str(selected["alert_id"])})
+        else:
+            _render_alert_detail(selected)
 
 
-def _render_alert_table(alerts: List[Dict]) -> Optional[Dict]:
+def _render_alert_table(
+    alerts: List[Dict],
+    *,
+    hidden_columns: Optional[List[str]] = None,
+    enable_selection: bool = True,
+    height: Optional[int] = None,
+) -> Optional[Dict]:
+    hidden = set(hidden_columns or [])
     rows = [
         {
-            "alert_id": item["alert_id"],
-            "상태": item["alert_status"],
-            "등급": item["alert_level"],
-            "제목": item["title"],
-            "장비": item["class_name"],
-            "지역": item["region_name"],
-            "센서": item["sensor_type"],
-            "촬영시각": item["captured_time"],
-            "보고": "있음" if item["has_report"] else "없음",
+            key: value
+            for key, value in {
+                "alert_id": item["alert_id"],
+                "상태": item["alert_status"],
+                "등급": _LEVEL_DISPLAY.get(item["alert_level"], item["alert_level"]),
+                "제목": item["title"],
+                "장비": item["class_name"],
+                "지역": item["region_name"],
+                "센서": item["sensor_type"],
+                "촬영시각": item["captured_time"],
+                "보고": "있음" if item["has_report"] else "없음",
+            }.items()
+            if key not in hidden
         }
         for item in alerts
     ]
+
+    # "지역"은 이름이 길면(예: 원산비행장, 근위 제6보병사단) 다른 컬럼에 밀려 한 글자만
+    # 보이도록 잘리곤 해서, 폭을 넉넉히 잡아 전체가 한눈에 보이게 한다.
+    column_config = {"지역": st.column_config.TextColumn("지역", width="large")}
+
+    if not enable_selection:
+        # 체크박스 선택 UI 없이 목록만 훑어보는 용도(예: HQ Desk 축소판)라, 클릭 선택도 없다.
+        st.dataframe(
+            pd.DataFrame(rows),
+            use_container_width=True,
+            hide_index=True,
+            height=height,
+            column_config=column_config,
+        )
+        return None
+
     event = st.dataframe(
         pd.DataFrame(rows),
         use_container_width=True,
         hide_index=True,
+        height=height,
+        column_config=column_config,
         on_select="rerun",
         selection_mode="single-row",
         key="alerts_table",
