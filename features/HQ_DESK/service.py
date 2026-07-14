@@ -498,6 +498,29 @@ def why_text_for_munition(munition_name: str) -> str:
     return "[타격 필요]"
 
 
+# 적군 "부대명" 컬럼이 DB에 따로 없어서, 지휘관 결심 로그의 who_text(적군 부대명) 대신
+# 값으로 "가장 최근에 탐지(분석)된 image_analysis 행의 region_id → region_name"을 쓴다.
+# (요청 그대로: image_analysis에서 created_at이 가장 최신인 행의 region_id를 region
+#  테이블에서 참조해 region_name을 가져온다.)
+_LATEST_IMAGE_ANALYSIS_REGION_QUERY = f"""
+    SELECT r.region_name
+    FROM `{_DB}`.`image_analysis` ia
+    JOIN `{_DB}`.`region` r ON ia.region_id = r.region_id
+    ORDER BY ia.created_at DESC
+    LIMIT 1
+"""
+
+
+def get_latest_detected_region_name() -> Optional[str]:
+    """image_analysis에서 created_at이 가장 최신인 행의 region_id로 region_name을 가져온다.
+
+    적군 "부대명" 필드가 없어, 지휘관 결심 로그의 who_text 대신 값으로 쓴다.
+    """
+    with get_engine().connect() as conn:
+        row = conn.execute(text(_LATEST_IMAGE_ANALYSIS_REGION_QUERY)).fetchone()
+    return row[0] if row else None
+
+
 _INSERT_COMMANDER_DECISION = f"""
     INSERT INTO `{_DB}`.`commander_decision`
         (commander_id, who_text, when_text, where_text, what_text, how_text, why_text, created_at)

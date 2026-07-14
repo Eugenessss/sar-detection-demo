@@ -346,13 +346,9 @@ def _sync_selected_munitions(
 def _render_decision_actions(alert: service.Alert, selected_assets: List[service.AllyAsset]) -> None:
     """선택된 타격 옵션에 대해 "타격"/"대기" 결심을 기록한다.
 
-    commander_id·who_text는 로그인 세션(st.session_state["auth_user"])에서 가져온다.
-    who_text에는 실제 "적군 부대명"이 아니라, 결심을 내린 지휘관의 이름을
-    "[이름]" 형식으로 기록한다(app_user.user_name — 현재는 지휘관 계정이
-    user_id=1 "최영희" 하나뿐이라 항상 "[최영희]"가 기록되지만, 로그인 세션 값을
-    그대로 쓰므로 지휘관 계정이 늘어나도 자동으로 그 사람 이름이 기록된다).
-    what_text(적군 장비)는 DB에 별도의 "부대명" 컬럼이 없어, 탐지된 적군 장비
-    종류(alert.asset_category)로 대신한다.
+    who_text(적군 부대명)·what_text(적군 장비)는 DB에 별도의 "부대명" 컬럼이 없어,
+    탐지된 적군 장비 정보(alert.asset_name/asset_category)로 대신한다 — 정확한
+    부대명 필드가 생기면 이 부분만 바꾸면 된다.
     선택한 옵션이 여러 개면(체크박스 여러 개 선택) 옵션마다 한 행씩 기록한다.
     """
     st.markdown("---")
@@ -362,18 +358,13 @@ def _render_decision_actions(alert: service.Alert, selected_assets: List[service
         st.info("오른쪽 아군 자산 패널에서 타격 옵션을 먼저 체크하세요.")
         return
 
-    # app.py의 nav 구성이 지휘관(role=COMMANDER) 로그인 사용자만 이 페이지에
-    # 접근하게 막아주지만, 방어적으로 한 번 더 확인한다.
-    auth_user = st.session_state.get("auth_user")
-    if auth_user is None or getattr(auth_user, "role", None) != "COMMANDER":
-        st.error("지휘관으로 로그인해야 타격/대기 결심을 기록할 수 있습니다.")
-        return
-
-    commander_id = auth_user.user_id
-    who_text = f"[{auth_user.user_name}]"
-
+    commander_key = f"hq_commander_id_{alert.alert_id}"
+    commander_id = st.number_input(
+        "지휘관 ID", min_value=0, step=1, key=commander_key,
+        help="로그인 기능이 없어 직접 입력합니다.",
+    )
     st.caption(
-        f"결심자: {auth_user.user_name}  ·  선택된 타격 옵션: "
+        "선택된 타격 옵션: "
         + ", ".join(f"{a.platform_name}·{a.munition_name}" for a in selected_assets)
     )
 
@@ -385,6 +376,12 @@ def _render_decision_actions(alert: service.Alert, selected_assets: List[service
         f"{alert.region} ({alert.latitude:.4f}, {alert.longitude:.4f})"
         if alert.region else f"{alert.latitude:.4f}, {alert.longitude:.4f}"
     )
+    # who_text(적군 부대명): DB에 부대명 컬럼이 따로 없어, "image_analysis에서 created_at이
+    # 가장 최신인 행의 region_id → region.region_name"을 대신 쓴다 (요청에 따른 매핑).
+    try:
+        who_text = service.get_latest_detected_region_name() or (alert.region or "정보 없음")
+    except Exception:
+        who_text = alert.region or "정보 없음"
     what_text = alert.asset_category or "정보 없음"
 
     strike_col, wait_col = st.columns(2)
@@ -394,7 +391,7 @@ def _render_decision_actions(alert: service.Alert, selected_assets: List[service
         try:
             for asset in selected_assets:
                 service.save_commander_decision(
-                    commander_id=commander_id,
+                    commander_id=int(commander_id),
                     who_text=who_text,
                     when_text=when_text,
                     where_text=where_text,
@@ -412,7 +409,7 @@ def _render_decision_actions(alert: service.Alert, selected_assets: List[service
         try:
             for asset in selected_assets:
                 service.save_commander_decision(
-                    commander_id=commander_id,
+                    commander_id=int(commander_id),
                     who_text=who_text,
                     when_text=when_text,
                     where_text=where_text,
