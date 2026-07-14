@@ -2,27 +2,19 @@ import datetime
 
 import altair as alt
 import streamlit as st
-from streamlit_folium import st_folium
 
 from features.ANALYST_DESK import service
 from features.statistics import service as stats_service
-from shared.ui_chrome import bracket_panel, floating_box, render_command_bar, section_label
-
-# 마커 클릭으로 어느 경보 좌표를 눌렀는지 판별할 때 쓰는 오차 허용치(도 단위, 약 100m).
-_CLICK_MATCH_TOLERANCE = 0.001
-
-
-def _find_alert_by_click(lat: float, lng: float, alerts: list) -> "service.Alert | None":
-    """지도에서 클릭된 좌표와 가장 가까운(오차범위 내) 경보를 찾는다."""
-    for alert in alerts:
-        if abs(alert.latitude - lat) <= _CLICK_MATCH_TOLERANCE and \
-           abs(alert.longitude - lng) <= _CLICK_MATCH_TOLERANCE:
-            return alert
-    return None
+from shared import tactical_map
+from shared.ui_chrome import bracket_panel, render_command_bar, section_label
 
 
 def _render_map_column() -> None:
-    """왼쪽 칸: 한반도 위성사진 + 경보 마커 지도. 마커를 누르면 EO/SAR 판독 페이지로 바로 이동한다."""
+    """왼쪽 칸: 한반도 위성사진 + 경보 마커 지도. 마커를 누르면 EO/SAR 판독 페이지로 바로 이동한다.
+
+    shared.tactical_map의 CCv2(진짜 양방향) 커스텀 지도를 쓴다 — folium/st_folium
+    기본 위젯 모양이 안 섞이면서도, 마커 클릭 시 Python으로 값이 그대로 돌아온다.
+    """
     # 센서 필터: 경보는 센서(EO/SAR)별 독립 체인으로 생성되므로, "전체"에서는
     # 지역별 최신 1건에 다른 센서의 경보가 가려질 수 있다. 센서를 고르면
     # 그 센서의 경보만 대상으로 지역별 최신 1건씩 표시한다.
@@ -32,7 +24,7 @@ def _render_map_column() -> None:
     sensor = None if sensor_choice in (None, "전체") else sensor_choice
 
     try:
-        m = service.build_eo_map()
+        tile_url = service.get_ee_tile_url()
     except Exception as exc:
         st.error(f"위성 지도 생성 실패: {exc}")
         return
@@ -48,48 +40,22 @@ def _render_map_column() -> None:
     if not alerts and sensor:
         st.info(f"{sensor} 경보가 없습니다.")
 
-    for alert in alerts:
-        level_label = service.marker_label(alert.alert_level)
-        marker_color = service.marker_color(alert.alert_level)
-        if alert.alert_level == "URGENT":
-            service.add_threat_rings(m, alert.latitude, alert.longitude, marker_color)
-        service.add_circle_marker(
-            m, alert.latitude, alert.longitude,
-            color=marker_color,
-            tooltip=f"[{level_label}·{alert.sensor_type}] {alert.asset_name}",
-        )
+    # 범례는 지도 위에 안 띄우고, 지도 바로 위에 한 줄로 둔다.
+    section_label("Map Legend")
+    st.markdown("🔴 긴급 · 🟠 중요 · 🔵 특이 (마커를 누르면 EO/SAR 판독 페이지로 이동)")
 
-    # 센서 필터를 key에 넣는다 — 필터를 바꾸면 지도를 새로 만들어, 직전 필터에서
-    # 클릭했던 좌표가 남아 엉뚱한 경보로 넘어가는 것을 막는다.
-    # 리셋 토큰도 넣는다 — EO/SAR로 이동했다가 상단 메뉴로 이 페이지에 돌아왔을 때
-    # 같은 key를 계속 쓰면 이전 클릭 좌표를 그대로 기억하고 있어서, 돌아오자마자
-    # 다시 클릭한 것처럼 인식해 또 이동해버리는 문제가 있다. 마커를 눌러 이동하기
-    # 직전에 토큰을 올려두면(아래) 돌아왔을 때 지도 컴포넌트가 새로 만들어진다.
-    map_key = f"analyst-desk-alert-map-{st.session_state.get('_analyst_desk_map_reset_token', 0)}-{sensor_choice}"
-    map_data = st_folium(
-        m, height=650,
-        use_container_width=True,
-        returned_objects=["last_object_clicked"],
-        key=map_key,
+    clicked_alert_id = tactical_map.render_tactical_map(
+        tile_url, alerts, service.NORTH_KOREA_BOUNDS,
+        marker_label=service.marker_label,
+        height=650,
+        key="analyst_tactical_map",
     )
-
-    clicked = map_data.get("last_object_clicked") if map_data else None
-    if clicked:
-        matched = _find_alert_by_click(clicked["lat"], clicked["lng"], alerts)
-        if matched is not None:
-            st.session_state["_analyst_desk_map_reset_token"] = (
-                st.session_state.get("_analyst_desk_map_reset_token", 0) + 1
-            )
-            eosar_page = st.session_state.get("_pages_by_url", {}).get("eosar")
-            if eosar_page is None:
-                st.error("EO/SAR 페이지를 찾을 수 없습니다.")
-            else:
-                st.switch_page(eosar_page)
-
-    # 지도 우상단에 떠 있는 범례 박스 (마커를 누르면 EO/SAR 판독 페이지로 이동).
-    with floating_box("analyst_map_legend"):
-        section_label("Map Legend")
-        st.markdown("🔴 긴급 · 🟠 중요 · 🔵 특이")
+    if clicked_alert_id is not None:
+        eosar_page = st.session_state.get("_pages_by_url", {}).get("eosar")
+        if eosar_page is None:
+            st.error("EO/SAR 페이지를 찾을 수 없습니다.")
+        else:
+            st.switch_page(eosar_page)
 
 
 def _render_24h_chart(overlay_data) -> None:
