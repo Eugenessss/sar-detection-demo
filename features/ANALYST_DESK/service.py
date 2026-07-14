@@ -26,7 +26,6 @@ from math import asin, cos, radians, sin, sqrt
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import ee
 import folium
 from sqlalchemy import text
 
@@ -250,25 +249,6 @@ def add_circle_marker(map_obj: folium.Map, latitude: float, longitude: float, co
     ).add_to(map_obj)
 
 
-# =====================================================================
-# EO 위성 배경 지도 (경보 지도 화면·경보 상세 화면 공용)
-# =====================================================================
-
-def _add_ee_layer(self, ee_image_object, vis_params, name):
-    """geemap 없이 Folium에 Earth Engine 레이어를 추가하는 함수 (folium.Map에 매서드로 붙인다)."""
-    map_id_dict = ee.Image(ee_image_object).getMapId(vis_params)
-    folium.raster_layers.TileLayer(
-        tiles=map_id_dict['tile_fetcher'].url_format,
-        attr='Google Earth Engine',
-        name=name,
-        overlay=True,
-        control=True,
-    ).add_to(self)
-
-
-folium.Map.add_ee_layer = _add_ee_layer
-
-
 # 초기 화면에 북한 전체가 다 보이도록 고정하는 범위. 이 페이지는 북한 동향(신의주·
 # 나선 등 북쪽 지역 포함)이 우선이라, 남한은 DMZ 부근까지만 걸치고 그 아래(서울 이남)는
 # 화면 밖으로 밀려나도록 남쪽 경계를 올렸다. fit_bounds로 위/아래 범위를 강제한다.
@@ -276,27 +256,10 @@ _NORTH_KOREA_BOUNDS = [[37.5, 124.0], [43.2, 130.8]]  # [남(DMZ 부근)], [북�
 
 
 def build_eo_map(location=(40.3, 127.4), zoom_start: int = 7) -> folium.Map:
-    """북한 전체가 보이도록 중심을 맞춘 Sentinel-2 EO 레이어 기본 지도를 만든다 (지도·상세 화면 공용)."""
-    # GEE 초기화 (인증 안 되어있으면 터미널에 링크 뜸)
-    try:
-        ee.Initialize(project='project-501908')
-    except Exception:
-        ee.Authenticate()
-        ee.Initialize(project='project-501908')
-
-    m = folium.Map(location=list(location), zoom_start=zoom_start)
-    # zoom_start만으로는 화면 비율에 따라 북한 위쪽이 잘려 보일 수 있어서,
-    # 북한 전체 범위를 명시적으로 고정한다.
-    m.fit_bounds(_NORTH_KOREA_BOUNDS)
-
-    dataset = ee.ImageCollection('COPERNICUS/S2_SR') \
-                  .filterBounds(ee.Geometry.Point([location[1], location[0]])) \
-                  .filterDate('2023-01-01', '2023-12-31') \
-                  .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10)) \
-                  .median()
-    vis_params = {'bands': ['B4', 'B3', 'B2'], 'min': 0, 'max': 3000}
-    m.add_ee_layer(dataset, vis_params, 'Sentinel-2 (True Color)')
-    return m
+    """북한 전체가 보이도록 맞춘 일반 작전 지도를 만든다 (지도·상세 화면 공용)."""
+    map_obj = folium.Map(location=list(location), zoom_start=zoom_start)
+    map_obj.fit_bounds(_NORTH_KOREA_BOUNDS)
+    return map_obj
 
 
 # =====================================================================

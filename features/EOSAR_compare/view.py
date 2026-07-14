@@ -34,11 +34,15 @@ from PIL import Image
 
 from features.sar.image import normalize_to_uint8_rgb
 from shared import s3_store
+from shared.ui import (
+    InfoItem,
+    render_empty_state,
+    render_info_strip,
+    render_page_header,
+    render_section_header,
+)
 
 Image.MAX_IMAGE_PIXELS = None   # 대형 SAR TIF도 열 수 있도록 픽셀 수 제한 해제
-
-_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "argos_logo.png"          # 빈 칸 표시용
-_LOGO_SMALL_PATH = Path(__file__).resolve().parent / "assets" / "argos_logo_small.png"  # 헤더용
 
 _REGIONS = ["개풍군", "원산시"]          # 지역 선택 드롭다운 항목
 _HOURS = list(range(0, 24, 2))           # 촬영 시각은 2시간 간격 (00, 02, ..., 22시)
@@ -187,15 +191,12 @@ def _report_image_b64(key: str) -> Optional[str]:
 
 def _render_header() -> None:
     """로고와 제목·설명을 페이지 상단에 그린다 (한 화면 배치를 위해 낮게 유지)."""
-    logo_path = _LOGO_SMALL_PATH if _LOGO_SMALL_PATH.exists() else _LOGO_PATH
-    if logo_path.exists():
-        logo_col, title_col = st.columns([0.06, 0.94], vertical_alignment="center")
-        with logo_col:
-            st.image(str(logo_path), use_container_width=True)
-        with title_col:
-            st.subheader("EO/SAR 비교 분석")
-    else:
-        st.subheader("EO/SAR 비교 분석")
+    render_page_header(
+        "영상 비교",
+        "동일 지역·시각의 EO와 SAR 원본 및 분석 영상을 한 화면에서 교차 판독합니다.",
+        eyebrow="MULTI-SENSOR COMPARISON",
+        status="비교 카탈로그 연결",
+    )
 
 
 def _render_controls(catalog: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -281,8 +282,13 @@ def _collect_cells(catalog: Dict[str, Any], region: str, captured_time: datetime
 def _render_image_cell(cell: Dict[str, Any]) -> None:
     """비교 그리드의 칸 하나: 제목 → [이미지 | 메모]를 좌우로 배치해 세로 길이를 줄인다."""
     key = cell["key"]
-    with st.container(border=True):
-        st.markdown(f"**{cell['title']}**")
+    panel_key = f"panel_compare_{cell['sensor'].lower()}_{cell['kind']}"
+    with st.container(key=panel_key):
+        render_section_header(
+            cell["title"],
+            "원본 영상" if cell["kind"] == "original" else "탐지 결과 영상",
+            badge=cell["sensor"],
+        )
         image_col, memo_col = st.columns([1.5, 1.0], gap="small")
 
         with image_col:
@@ -290,14 +296,18 @@ def _render_image_cell(cell: Dict[str, Any]) -> None:
             if key is not None and image is not None:
                 st.image(image, use_container_width=True)
             else:
-                if _LOGO_PATH.exists():
-                    _, middle, _ = st.columns([1, 2, 1])
-                    with middle:
-                        st.image(str(_LOGO_PATH), use_container_width=True)
                 if key is None:
-                    st.caption("선택한 지역·시각에 해당하는 이미지가 없습니다.")
+                    render_empty_state(
+                        "영상 없음",
+                        "선택한 지역과 촬영시각에 해당하는 영상이 없습니다.",
+                        symbol="□",
+                    )
                 else:
-                    st.caption(f"이미지를 불러오지 못했습니다: {key}")
+                    render_empty_state(
+                        "불러오기 실패",
+                        f"이미지 파일을 확인하세요: {key}",
+                        symbol="!",
+                    )
 
         with memo_col:
             st.text_area(
@@ -480,10 +490,13 @@ def render_eosar_compare_page() -> None:
         st.warning("S3(original_image/·result_image/)에 비교할 이미지가 없습니다.")
         st.stop()
 
-    with st.container(border=True):
-        controls_area, button_area = st.columns([4.8, 1.2], vertical_alignment="bottom")
-        with controls_area:
-            selection = _render_controls(catalog)
+    with st.container(key="panel_compare_filters"):
+        render_section_header(
+            "비교 조건",
+            "지역과 촬영시각을 선택해 센서별 영상 세트를 불러옵니다.",
+            badge="FILTER",
+        )
+        selection = _render_controls(catalog)
 
     if selection is None:
         return
@@ -491,6 +504,16 @@ def render_eosar_compare_page() -> None:
     region = selection["region"]
     captured_time = selection["captured_time"]
     cells = _collect_cells(catalog, region, captured_time)
+
+    available_count = sum(cell["key"] is not None for cell in cells)
+    render_info_strip(
+        [
+            InfoItem("지역", region, "primary"),
+            InfoItem("촬영시각", f"{captured_time:%Y-%m-%d %H:%M}"),
+            InfoItem("보유 영상", f"{available_count}/4", "success" if available_count == 4 else "warning"),
+            InfoItem("비교 센서", "EO · SAR"),
+        ]
+    )
 
     # 오른쪽 위 버튼: 현재 선택·메모를 반영한 HTML 보고서 다운로드.
     memos = {cell["memo_key"]: str(st.session_state.get(cell["memo_key"], "")) for cell in cells}
@@ -501,14 +524,23 @@ def render_eosar_compare_page() -> None:
         cells,
         memos,
     )
-    with button_area:
-        st.download_button(
-            "HTML 보고서 저장",
-            data=report_html.encode("utf-8"),
-            file_name=f"EOSAR_비교보고서_{region}_{captured_time:%Y%m%d_%H%M}.html",
-            mime="text/html",
-            type="primary",
-            use_container_width=True,
-        )
+    with st.container(key="panel_compare_board_toolbar"):
+        board_title_col, button_area = st.columns([4.8, 1.2], vertical_alignment="center")
+        with board_title_col:
+            render_section_header(
+                "EO/SAR 비교 보드",
+                f"{region} · {captured_time:%Y-%m-%d %H:%M} 기준",
+                badge="4 PANELS",
+            )
+        with button_area:
+            st.download_button(
+                "HTML 보고서 저장",
+                data=report_html.encode("utf-8"),
+                file_name=f"EOSAR_비교보고서_{region}_{captured_time:%Y%m%d_%H%M}.html",
+                mime="text/html",
+                type="primary",
+                icon=":material/download:",
+                use_container_width=True,
+            )
 
     _render_compare_grid(cells)

@@ -1,0 +1,19 @@
+[theme]
+base = "light"
+primaryColor = "#2563EB"
+backgroundColor = "#F4F7FB"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#0F172A"
+font = "sans-serif"
+baseRadius = "large"
+showWidgetBorder = true
+borderColor = "#DCE4EE"
+dataframeBorderColor = "#DCE4EE"
+dataframeHeaderBackgroundColor = "#F8FAFC"
+chartCategoricalColors = ["#2563EB", "#0EA5E9", "#059669", "#D97706", "#DC2626", "#7C3AED"]
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false

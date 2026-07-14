@@ -28,6 +28,7 @@ from PIL import Image
 from streamlit_folium import st_folium
 
 from features.HQ_DESK import service
+from shared.ui import InfoItem, render_info_strip, render_page_header, render_section_header
 
 
 def _render_enemy_asset_card(alert: service.Alert) -> None:
@@ -344,6 +345,17 @@ def _sync_selected_munitions(
 
 
 def _render_decision_actions(alert: service.Alert, selected_assets: List[service.AllyAsset]) -> None:
+    """지휘관 결심 기능을 전용 카드 안에 표시한다."""
+    with st.container(key="panel_hq_decision"):
+        render_section_header(
+            "지휘관 결심",
+            "선택한 대응 자산을 기준으로 타격 또는 대기 결심을 기록합니다.",
+            badge="DECISION",
+        )
+        _render_decision_actions_content(alert, selected_assets)
+
+
+def _render_decision_actions_content(alert: service.Alert, selected_assets: List[service.AllyAsset]) -> None:
     """선택된 타격 옵션에 대해 "타격"/"대기" 결심을 기록한다.
 
     commander_id·who_text는 로그인 세션(st.session_state["auth_user"])에서 가져온다.
@@ -355,9 +367,6 @@ def _render_decision_actions(alert: service.Alert, selected_assets: List[service
     종류(alert.asset_category)로 대신한다.
     선택한 옵션이 여러 개면(체크박스 여러 개 선택) 옵션마다 한 행씩 기록한다.
     """
-    st.markdown("---")
-    st.subheader("지휘관 결심")
-
     if not selected_assets:
         st.info("오른쪽 아군 자산 패널에서 타격 옵션을 먼저 체크하세요.")
         return
@@ -427,9 +436,18 @@ def _render_decision_actions(alert: service.Alert, selected_assets: List[service
 
 
 def _render_decision_log() -> None:
+    """최근 지휘관 결심 로그를 전용 카드 안에 표시한다."""
+    with st.container(key="panel_hq_decision_log"):
+        render_section_header(
+            "지휘관 결심 로그",
+            "최근 기록된 타격·대기 결심을 시간순으로 확인합니다.",
+            badge="HISTORY",
+        )
+        _render_decision_log_content()
+
+
+def _render_decision_log_content() -> None:
     """페이지 하단에 최근 지휘관 결심(타격/대기) 로그를 표로 보여준다."""
-    st.markdown("---")
-    st.subheader("지휘관 결심 로그")
     try:
         rows = service.get_recent_commander_decisions()
     except Exception as exc:
@@ -443,10 +461,6 @@ def _render_decision_log() -> None:
 
 def render_alert_detail_page() -> None:
     """경보 상세 페이지 전체를 그린다."""
-    # 페이지 상단 여백을 줄여서 전체 내용을 위로 올린다 (제목을 없앤 만큼 빈 공간이 남지 않도록).
-    # 너무 줄이면 Streamlit 상단 툴바에 "지도로 돌아가기" 버튼이 가려져서 3rem으로 둔다.
-    st.markdown("<style>div.block-container{padding-top:3rem;}</style>", unsafe_allow_html=True)
-
     if st.button("← 지도로 돌아가기"):
         st.session_state["view"] = "map"
         # 지도 컴포넌트를 새로 만들도록 key를 바꿔, 이전 클릭 좌표가 남아있지 않게 한다.
@@ -465,6 +479,30 @@ def render_alert_detail_page() -> None:
     if alert is None:
         st.warning("선택된 경보가 없습니다. 지도에서 마커를 눌러주세요.")
         return
+
+    render_page_header(
+        alert.title or "경보 상세",
+        f"{alert.region or '지역 미상'} · {alert.sensor_type or '센서 미상'} 경보의 표적 정보와 대응 자산을 검토합니다.",
+        eyebrow="COMMAND DECISION SUPPORT",
+    )
+    render_info_strip(
+        [
+            InfoItem(
+                "경보 등급",
+                service.ALERT_LEVEL_LABELS.get(alert.alert_level, alert.alert_level),
+                {"URGENT": "danger", "IMPORTANT": "warning", "NOTICE": "primary"}.get(
+                    alert.alert_level, "default"
+                ),
+            ),
+            InfoItem("감시 센서", alert.sensor_type or "-", "primary"),
+            InfoItem("작전 지역", alert.region or "-"),
+            InfoItem("탐지 자산", alert.asset_name or "-"),
+            InfoItem(
+                "탐지 시각",
+                alert.detected_at.strftime("%Y-%m-%d %H:%M") if alert.detected_at else "-",
+            ),
+        ]
+    )
 
     # 센서 전환: 같은 지역의 선택 센서 최신 경보로 점프한다.
     # 위젯 key에 alert_id를 넣어, 점프 후에는 새 경보의 센서가 선택된 상태로 그려진다.
@@ -506,16 +544,22 @@ def render_alert_detail_page() -> None:
     selected_ids = st.session_state.get(selection_key, set())
     selected_assets = [a for a in evaluated_assets if a.asset_id in selected_ids]
 
-    enemy_col, photo_col, friendly_col = st.columns([3, 4, 3])
+    enemy_col, photo_col, friendly_col = st.columns([3, 4, 3], gap="large")
 
     with enemy_col:
-        _render_enemy_asset_card(alert)
+        with st.container(key="panel_hq_enemy_asset"):
+            render_section_header("적군 자산", "경보 근거와 표적 정보를 확인합니다.", badge="THREAT")
+            _render_enemy_asset_card(alert)
 
     with photo_col:
-        _render_alert_photos(alert.alert_id, selected_assets)
+        with st.container(key="panel_hq_alert_photos"):
+            render_section_header("위성영상", "시간대별 영상과 예상 타격반경을 비교합니다.", badge="IMAGERY")
+            _render_alert_photos(alert.alert_id, selected_assets)
 
     with friendly_col:
-        _render_friendly_asset_panel(alert, evaluated_assets, selection_key)
+        with st.container(key="panel_hq_friendly_assets"):
+            render_section_header("아군 대응 자산", "사거리 충족 자산과 무장 옵션을 검토합니다.", badge="ASSETS")
+            _render_friendly_asset_panel(alert, evaluated_assets, selection_key)
 
     _render_decision_actions(alert, selected_assets)
     _render_decision_log()
