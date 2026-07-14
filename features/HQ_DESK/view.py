@@ -1,14 +1,11 @@
 from typing import Optional
 
 import streamlit as st
-from streamlit_folium import st_folium
 
 from features.alerts.view import render_alerts_page
 from features.HQ_DESK import detail_view, service
-from shared.ui_chrome import bracket_panel, floating_box, render_command_bar, section_label
-
-# 마커 클릭으로 어느 경보 좌표를 눌렀는지 판별할 때 쓰는 오차 허용치(도 단위, 약 100m).
-_CLICK_MATCH_TOLERANCE = 0.001
+from shared import tactical_map
+from shared.ui_chrome import bracket_panel, render_command_bar
 
 # 지도(왼쪽) : 경보 확인 목록(오른쪽) 컬럼 폭 비율. 지도를 아주 살짝 줄이고
 # 표를 약간 키워서, "지역" 컬럼(예: 개풍군)이 한눈에 다 보이도록 한다.
@@ -18,22 +15,19 @@ _MAP_COLUMN_RATIO = [3, 1]
 _MAP_HEIGHT_PX = 650
 
 
-def _find_alert_by_click(lat: float, lng: float, alerts: list) -> "service.Alert | None":
-    """지도에서 클릭된 좌표와 가장 가까운(오차범위 내) 경보를 찾는다."""
-    for alert in alerts:
-        if abs(alert.latitude - lat) <= _CLICK_MATCH_TOLERANCE and \
-           abs(alert.longitude - lng) <= _CLICK_MATCH_TOLERANCE:
-            return alert
-    return None
+def _render_map(sensor: Optional[str], sensor_choice: Optional[str]) -> "list[service.Alert]":
+    """한반도 위성사진 + 경보 마커 지도를 그린다.
 
-
-def _render_map(sensor: Optional[str], sensor_choice: Optional[str]) -> None:
-    """한반도 위성사진 + 경보 마커 지도를 그린다. 마커를 누르면 상세 화면으로 전환한다."""
+    shared.tactical_map의 완전 커스텀 지도(Leaflet 직접 제어)를 쓴다 — folium/
+    st_folium 기본 위젯 모양이 안 섞이는 대신, Streamlit과 양방향 통신이 안 돼서
+    마커를 직접 눌러 상세 화면으로 가는 건 안 된다. 그 대신 아래(render_map_view)
+    에서 조회한 alerts로 작은 버튼 줄을 만들어 상세 화면 진입을 대신한다.
+    """
     try:
-        m = service.build_eo_map()
+        tile_url = service.get_ee_tile_url()
     except Exception as exc:
         st.error(f"위성 지도 생성 실패: {exc}")
-        return
+        return []
 
     # 경보(alert_id) 목록을 DB에서 조회해 지도에 마커로 표시.
     # 색은 경보수준(긴급/중요/특이)에 따라 다르게 찍는다.
@@ -46,37 +40,41 @@ def _render_map(sensor: Optional[str], sensor_choice: Optional[str]) -> None:
     if not alerts and sensor:
         st.info(f"{sensor} 경보가 없습니다.")
 
-    for alert in alerts:
-        level_label = service.marker_label(alert.alert_level)
-        marker_color = service.marker_color(alert.alert_level)
-        if alert.alert_level == "URGENT":
-            service.add_threat_rings(m, alert.latitude, alert.longitude, marker_color)
-        service.add_circle_marker(
-            m, alert.latitude, alert.longitude,
-            color=marker_color,
-            tooltip=f"[{level_label}·{alert.sensor_type}] {alert.asset_name}",
-        )
-
-    # 상세 화면에서 돌아올 때마다 key를 바꿔 지도 컴포넌트를 새로 만든다.
-    # (같은 key를 계속 쓰면 이전 클릭 좌표를 계속 기억하고 있어서, 같은 마커를
-    #  다시 눌러도 "새 클릭"으로 인식하지 못하는 문제가 있었다.)
-    # 센서 필터도 key에 넣는다 — 필터를 바꾸면 지도를 새로 만들어, 직전 필터에서
-    # 클릭했던 좌표가 남아 엉뚱한 경보로 넘어가는 것을 막는다.
-    map_key = f"alert-map-{st.session_state.get('_map_reset_token', 0)}-{sensor_choice}"
-    map_data = st_folium(
-        m, height=_MAP_HEIGHT_PX,
-        use_container_width=True,
-        returned_objects=["last_object_clicked"],
-        key=map_key,
+    markers = [
+        {
+            "lat": alert.latitude,
+            "lon": alert.longitude,
+            "level": alert.alert_level,
+            "label": (
+                f"[{service.marker_label(alert.alert_level)}·{alert.sensor_type}] "
+                f"{alert.asset_name}"
+            ),
+        }
+        for alert in alerts
+    ]
+    tactical_map.render_tactical_map(
+        tile_url, markers, service.KOREA_PENINSULA_BOUNDS, height=_MAP_HEIGHT_PX,
     )
+    return alerts
 
-    clicked = map_data.get("last_object_clicked") if map_data else None
-    if clicked:
-        matched = _find_alert_by_click(clicked["lat"], clicked["lng"], alerts)
-        if matched is not None:
-            st.session_state["selected_alert_id"] = matched.alert_id
-            st.session_state["view"] = "detail"
-            st.rerun()
+
+def _render_detail_shortcuts(alerts: "list[service.Alert]") -> None:
+    """지도에서 마커를 직접 못 누르는 대신, 경보별 작은 버튼으로 상세 화면(적/아군
+    3분할 — 지도 클릭으로 가던 것과 같은 화면)에 들어가는 지름길을 준다."""
+    if not alerts:
+        return
+    cols = st.columns(len(alerts))
+    for col, alert in zip(cols, alerts):
+        with col:
+            level_label = service.marker_label(alert.alert_level)
+            if st.button(
+                f"[{level_label}] {alert.asset_name}",
+                key=f"hq_detail_shortcut_{alert.alert_id}",
+                use_container_width=True,
+            ):
+                st.session_state["selected_alert_id"] = alert.alert_id
+                st.session_state["view"] = "detail"
+                st.rerun()
 
 
 def render_map_view() -> None:
@@ -99,12 +97,9 @@ def render_map_view() -> None:
             )
             sensor = None if sensor_choice in (None, "전체") else sensor_choice
 
-            _render_map(sensor, sensor_choice)
-
-            # 지도 우상단에 떠 있는 범례 박스 (마커를 누르면 상세 화면으로 이동).
-            with floating_box("hq_map_legend"):
-                section_label("Map Legend")
-                st.markdown("🔴 긴급 · 🟠 중요 · 🔵 특이")
+            # 범례는 이제 지도 컴포넌트 자체(shared.tactical_map)가 우상단에 그린다.
+            map_alerts = _render_map(sensor, sensor_choice)
+            _render_detail_shortcuts(map_alerts)
 
     with alerts_col:
         with bracket_panel("hq_alerts_panel"):
