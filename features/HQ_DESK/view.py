@@ -15,19 +15,18 @@ _MAP_COLUMN_RATIO = [3, 1]
 _MAP_HEIGHT_PX = 650
 
 
-def _render_map(sensor: Optional[str], sensor_choice: Optional[str]) -> "list[service.Alert]":
-    """한반도 위성사진 + 경보 마커 지도를 그린다.
+def _render_map(sensor: Optional[str], sensor_choice: Optional[str]) -> None:
+    """한반도 위성사진 + 경보 마커 지도를 그린다. 마커를 누르면 상세 화면으로 전환한다.
 
-    shared.tactical_map의 완전 커스텀 지도(Leaflet 직접 제어)를 쓴다 — folium/
-    st_folium 기본 위젯 모양이 안 섞이는 대신, Streamlit과 양방향 통신이 안 돼서
-    마커를 직접 눌러 상세 화면으로 가는 건 안 된다. 그 대신 아래(render_map_view)
-    에서 조회한 alerts로 작은 버튼 줄을 만들어 상세 화면 진입을 대신한다.
+    shared.tactical_map의 CCv2(진짜 양방향) 커스텀 지도를 쓴다 — folium/st_folium
+    기본 위젯 모양이 안 섞이면서도, 마커 클릭 시 Python으로 값이 그대로 돌아오므로
+    기존과 똑같이 클릭 한 번으로 상세 화면 전환이 된다.
     """
     try:
         tile_url = service.get_ee_tile_url()
     except Exception as exc:
         st.error(f"위성 지도 생성 실패: {exc}")
-        return []
+        return
 
     # 경보(alert_id) 목록을 DB에서 조회해 지도에 마커로 표시.
     # 색은 경보수준(긴급/중요/특이)에 따라 다르게 찍는다.
@@ -40,41 +39,16 @@ def _render_map(sensor: Optional[str], sensor_choice: Optional[str]) -> "list[se
     if not alerts and sensor:
         st.info(f"{sensor} 경보가 없습니다.")
 
-    markers = [
-        {
-            "lat": alert.latitude,
-            "lon": alert.longitude,
-            "level": alert.alert_level,
-            "label": (
-                f"[{service.marker_label(alert.alert_level)}·{alert.sensor_type}] "
-                f"{alert.asset_name}"
-            ),
-        }
-        for alert in alerts
-    ]
-    tactical_map.render_tactical_map(
-        tile_url, markers, service.KOREA_PENINSULA_BOUNDS, height=_MAP_HEIGHT_PX,
+    clicked_alert_id = tactical_map.render_tactical_map(
+        tile_url, alerts, service.KOREA_PENINSULA_BOUNDS,
+        marker_label=service.marker_label,
+        height=_MAP_HEIGHT_PX,
+        key="hq_tactical_map",
     )
-    return alerts
-
-
-def _render_detail_shortcuts(alerts: "list[service.Alert]") -> None:
-    """지도에서 마커를 직접 못 누르는 대신, 경보별 작은 버튼으로 상세 화면(적/아군
-    3분할 — 지도 클릭으로 가던 것과 같은 화면)에 들어가는 지름길을 준다."""
-    if not alerts:
-        return
-    cols = st.columns(len(alerts))
-    for col, alert in zip(cols, alerts):
-        with col:
-            level_label = service.marker_label(alert.alert_level)
-            if st.button(
-                f"[{level_label}] {alert.asset_name}",
-                key=f"hq_detail_shortcut_{alert.alert_id}",
-                use_container_width=True,
-            ):
-                st.session_state["selected_alert_id"] = alert.alert_id
-                st.session_state["view"] = "detail"
-                st.rerun()
+    if clicked_alert_id is not None:
+        st.session_state["selected_alert_id"] = clicked_alert_id
+        st.session_state["view"] = "detail"
+        st.rerun()
 
 
 def render_map_view() -> None:
@@ -97,9 +71,8 @@ def render_map_view() -> None:
             )
             sensor = None if sensor_choice in (None, "전체") else sensor_choice
 
-            # 범례는 이제 지도 컴포넌트 자체(shared.tactical_map)가 우상단에 그린다.
-            map_alerts = _render_map(sensor, sensor_choice)
-            _render_detail_shortcuts(map_alerts)
+            # 범례는 지도 컴포넌트 자체(shared.tactical_map)가 우상단에 그린다.
+            _render_map(sensor, sensor_choice)
 
     with alerts_col:
         with bracket_panel("hq_alerts_panel"):
