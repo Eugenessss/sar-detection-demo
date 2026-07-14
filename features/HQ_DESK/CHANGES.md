@@ -161,3 +161,48 @@ FK 체인: `alert.change_id → change_event.change_id`, `change_event.current_i
 먼저 호출해, `st.session_state[위젯key]`(Streamlit이 rerun 시작 시점에 이미 최신 클릭
 결과로 갱신해 둔 값)를 읽어 selection set에 미리 반영한다. 그 다음에 계산하는
 `selected_assets`가 이미 최신 상태이므로, 사진에 바로 원이 나타난다.
+
+## 7. 적군 위치 표시 + 타격/대기 버튼 + commander_decision 로그 (신규)
+
+아군 자산을 선택한 뒤 실제로 "타격"할지 "대기"할지 지휘관이 결심하고, 그 결심을
+`commander_decision` 테이블에 기록 → 화면 하단에 로그로 보여주는 기능을 추가했다.
+
+### 적군 위치를 아군 자산 지도에도 표시 (detail_view.py `_render_friendly_asset_panel`)
+
+- 기존 기능(부대 마커 클릭 → 무장 옵션 체크박스)은 그대로 두고, 같은 지도에 적군 위치
+  마커를 하나 더 찍는다. 색상은 경보 지도와 같은 규칙(`service.marker_color(alert_level)`
+  — 🔴 긴급/🟠 중요/🔵 특이)을 그대로 써서 위험도를 지도만 봐도 알 수 있게 했다.
+
+### commander_decision 저장 로직 (service.py)
+
+- `why_text_for_munition(munition_name)` — 요청받은 규칙 그대로 매핑:
+  `KGGB 유도폭탄`/`600mm 탄도미사일` → `[상세 타격 필요]`, `집속탄`/`이중목적고폭탄`/
+  `130mm 무유도미사일`(또는 이름에 "무유도미사일" 포함) → `[넓은 면적 타격 필요]`,
+  `대전차고폭탄` → `[기갑표적 타격 필요]`. 목록에 없는 새 무장이 추가될 경우를 대비해
+  기본값으로 `[타격 필요]`를 반환한다(안전장치, 요청엔 없던 값이라 새 무장 발견 시
+  이 텍스트가 나오면 규칙을 더 추가해야 한다는 신호로 보면 된다).
+- `save_commander_decision(commander_id, who_text, when_text, where_text, what_text, how_text, why_text, created_at)`
+  — `commander_decision` 테이블에 1행 INSERT. `report_id`는 테이블의 자동증가 기본키라고
+  가정하고 INSERT에 넣지 않는다(테이블은 이미 존재한다는 전제이며 새로 만들지 않음).
+- `get_recent_commander_decisions(limit=20)` — 최신순으로 로그를 조회(하단 표 표시용).
+
+### 타격/대기 버튼 UI + 하단 로그 표 (detail_view.py)
+
+- `_render_decision_actions(alert, selected_assets)` — 3칸 레이아웃 아래(전체 폭)에 배치.
+  선택된 무장 옵션이 없으면 안내만 표시. 있으면 지휘관 ID 입력칸(로그인 기능이 없어 직접
+  입력, `st.number_input`)과 "🎯 타격"/"⏸ 대기" 버튼 두 개를 보여준다.
+  - 필드 매핑: `when_text`=`alert.detected_at`(탐지시각), `where_text`=`alert.region`+좌표,
+    `how_text`=선택한 자산의 `platform_name·munition_name`, `why_text`=
+    `why_text_for_munition(munition_name)`. 체크된 옵션이 여러 개면 옵션마다 한 행씩 기록.
+  - **who_text(적군 부대명)**: DB에 부대명 컬럼이 따로 없어서, `service.get_latest_detected_region_name()`
+    (image_analysis에서 `created_at`이 가장 최신인 행의 `region_id` → `region.region_name`)
+    값을 대신 쓴다. 조회 실패 시 `alert.region`으로 대체한다.
+  - `what_text`(적군 장비)는 적군 장비 종류(`alert.asset_category`)를 그대로 쓴다.
+  - "⏸ 대기" 버튼은 요청대로 `how_text`/`why_text`만 `[대기]`로 남기고 나머지(누구/언제/
+    어디서/무엇을)는 타격 버튼과 동일한 값으로 기록한다.
+  - `created_at`은 버튼을 누른 시각(`datetime.now()`).
+- `_render_decision_log()` — `get_recent_commander_decisions()` 결과를 `st.dataframe`으로
+  페이지 맨 아래에 표시.
+- `report_id`가 실제로 자동증가 기본키인지, `commander_decision` 테이블 스키마가 위 컬럼
+  구성과 정확히 일치하는지는 샌드박스에서 DB에 직접 연결할 수 없어 확인하지 못했다 — 만약
+  INSERT가 스키마 불일치로 실패하면 화면에 `st.error`로 에러 메시지가 그대로 표시된다.

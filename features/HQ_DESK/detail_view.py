@@ -19,6 +19,7 @@
 """
 import base64
 import random
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -248,6 +249,14 @@ def _render_friendly_asset_panel(
         st.error(f"아군 자산 지도 생성 실패: {exc}")
         return
 
+    # 적군 위치도 같은 지도에 표시한다 (경보 지도와 같은 경보수준 색상 규칙을 그대로 써서,
+    # 어느 위험도의 표적인지 아군 자산 지도에서도 바로 알아볼 수 있게 한다).
+    service.add_circle_marker(
+        friendly_map, alert.latitude, alert.longitude,
+        color=service.marker_color(alert.alert_level),
+        tooltip=f"적군: {alert.asset_name or '미상'} ({alert.region or '지역 정보 없음'})",
+    )
+
     units = service.group_ally_units(evaluated_assets)
     for unit in units:
         service.add_circle_marker(
@@ -334,6 +343,101 @@ def _sync_selected_munitions(
             selected_ids.discard(asset.asset_id)
 
 
+def _render_decision_actions(alert: service.Alert, selected_assets: List[service.AllyAsset]) -> None:
+    """선택된 타격 옵션에 대해 "타격"/"대기" 결심을 기록한다.
+
+    who_text(적군 부대명)·what_text(적군 장비)는 DB에 별도의 "부대명" 컬럼이 없어,
+    탐지된 적군 장비 정보(alert.asset_name/asset_category)로 대신한다 — 정확한
+    부대명 필드가 생기면 이 부분만 바꾸면 된다.
+    선택한 옵션이 여러 개면(체크박스 여러 개 선택) 옵션마다 한 행씩 기록한다.
+    """
+    st.markdown("---")
+    st.subheader("지휘관 결심")
+
+    if not selected_assets:
+        st.info("오른쪽 아군 자산 패널에서 타격 옵션을 먼저 체크하세요.")
+        return
+
+    commander_key = f"hq_commander_id_{alert.alert_id}"
+    commander_id = st.number_input(
+        "지휘관 ID", min_value=0, step=1, key=commander_key,
+        help="로그인 기능이 없어 직접 입력합니다.",
+    )
+    st.caption(
+        "선택된 타격 옵션: "
+        + ", ".join(f"{a.platform_name}·{a.munition_name}" for a in selected_assets)
+    )
+
+    when_text = (
+        alert.detected_at.strftime("%Y-%m-%d %H:%M:%S")
+        if alert.detected_at else "정보 없음"
+    )
+    where_text = (
+        f"{alert.region} ({alert.latitude:.4f}, {alert.longitude:.4f})"
+        if alert.region else f"{alert.latitude:.4f}, {alert.longitude:.4f}"
+    )
+    # who_text(적군 부대명): DB에 부대명 컬럼이 따로 없어, "image_analysis에서 created_at이
+    # 가장 최신인 행의 region_id → region.region_name"을 대신 쓴다 (요청에 따른 매핑).
+    try:
+        who_text = service.get_latest_detected_region_name() or (alert.region or "정보 없음")
+    except Exception:
+        who_text = alert.region or "정보 없음"
+    what_text = alert.asset_category or "정보 없음"
+
+    strike_col, wait_col = st.columns(2)
+
+    if strike_col.button("🎯 타격", key=f"hq_strike_btn_{alert.alert_id}", type="primary", use_container_width=True):
+        now = datetime.now()
+        try:
+            for asset in selected_assets:
+                service.save_commander_decision(
+                    commander_id=int(commander_id),
+                    who_text=who_text,
+                    when_text=when_text,
+                    where_text=where_text,
+                    what_text=what_text,
+                    how_text=f"{asset.platform_name}·{asset.munition_name}",
+                    why_text=service.why_text_for_munition(asset.munition_name),
+                    created_at=now,
+                )
+            st.success(f"타격 결심 {len(selected_assets)}건이 기록되었습니다.")
+        except Exception as exc:
+            st.error(f"결심 기록 실패: {exc}")
+
+    if wait_col.button("⏸ 대기", key=f"hq_wait_btn_{alert.alert_id}", use_container_width=True):
+        now = datetime.now()
+        try:
+            for asset in selected_assets:
+                service.save_commander_decision(
+                    commander_id=int(commander_id),
+                    who_text=who_text,
+                    when_text=when_text,
+                    where_text=where_text,
+                    what_text=what_text,
+                    how_text=service.WAIT_TEXT,
+                    why_text=service.WAIT_TEXT,
+                    created_at=now,
+                )
+            st.success(f"대기 결심 {len(selected_assets)}건이 기록되었습니다.")
+        except Exception as exc:
+            st.error(f"결심 기록 실패: {exc}")
+
+
+def _render_decision_log() -> None:
+    """페이지 하단에 최근 지휘관 결심(타격/대기) 로그를 표로 보여준다."""
+    st.markdown("---")
+    st.subheader("지휘관 결심 로그")
+    try:
+        rows = service.get_recent_commander_decisions()
+    except Exception as exc:
+        st.error(f"결심 로그 조회 실패: {exc}")
+        return
+    if not rows:
+        st.caption("기록된 결심이 없습니다.")
+        return
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
 def render_alert_detail_page() -> None:
     """경보 상세 페이지 전체를 그린다."""
     # 페이지 상단 여백을 줄여서 전체 내용을 위로 올린다 (제목을 없앤 만큼 빈 공간이 남지 않도록).
@@ -409,3 +513,6 @@ def render_alert_detail_page() -> None:
 
     with friendly_col:
         _render_friendly_asset_panel(alert, evaluated_assets, selection_key)
+
+    _render_decision_actions(alert, selected_assets)
+    _render_decision_log()
