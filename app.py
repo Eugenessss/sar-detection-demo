@@ -15,7 +15,7 @@ from features.statistics.view import render_statistics_page
 from features.EOSAR_compare.view import render_eosar_compare_page
 from features.ANALYST_DESK.view import render_hq_desk_page as render_analyst_desk_page
 from login import render_login_page
-from shared.theme_sync import detect_ui_theme
+from shared.theme_sync import install_theme_reload_hook
 from shared.ui.navigation import render_top_navigation
 from shared.ui.styles import load_global_styles
 
@@ -35,11 +35,14 @@ auth_user = st.session_state.get("auth_user")
 # 건드리는데, 저 메뉴로 실제 테마를 바꿔야만 그런 위젯도 같이 바뀐다. 페이지/내비
 # 구성보다 먼저 읽어야 render_top_navigation()의 헤더 색도 맞출 수 있다.
 #
-# st.context.theme.type은 메뉴에서 테마를 바꿔도(심지어 다른 위젯을 눌러도) 안
-# 갱신되고 로그아웃 후 재접속해야만 반영되는 문제가 있어서 안 쓴다. 대신
-# detect_ui_theme()가 우리 CSS가 안 건드리는 네이티브 ☰ 메뉴 요소의 실제 글자색을
-# 봐서 지금 테마를 직접 판정하고, 바뀐 걸 감지하면 그 자리에서 rerun까지 강제한다.
-ui_theme = detect_ui_theme()
+# 실측 결과: 그 메뉴에서 테마를 눌러도 지금 세션에서는 아무것도(네이티브 위젯
+# 포함) 곧바로 안 바뀌고, 새로고침하거나 로그아웃 후 재접속(=새 세션)해야만 전체가
+# 반영된다 -- st.context.theme.type도 그 전까지 계속 예전 값이다. 그래서 감지해서
+# rerun하는 대신, install_theme_reload_hook()이 테마 라디오를 클릭하는 순간을 직접
+# 잡아 자동으로 새로고침해 "로그아웃 후 재접속"과 같은 효과를 낸다. 새로고침(=새
+# 세션)이 일어난 뒤에는 st.context.theme.type이 정상적으로 올바른 값을 준다.
+install_theme_reload_hook()
+ui_theme = st.context.theme.type
 st.session_state["ui_theme"] = ui_theme
 
 # 로그인 전에는 기본 내비게이션을 숨긴 채 로그인 페이지만 등록한다. 로그인 후에는
