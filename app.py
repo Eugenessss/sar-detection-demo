@@ -15,7 +15,7 @@ from features.statistics.view import render_statistics_page
 from features.EOSAR_compare.view import render_eosar_compare_page
 from features.ANALYST_DESK.view import render_hq_desk_page as render_analyst_desk_page
 from login import render_login_page
-from shared.theme_sync import sync_theme_on_change
+from shared.theme_sync import detect_ui_theme
 from shared.ui.navigation import render_top_navigation
 from shared.ui.styles import load_global_styles
 
@@ -35,11 +35,11 @@ auth_user = st.session_state.get("auth_user")
 # 건드리는데, 저 메뉴로 실제 테마를 바꿔야만 그런 위젯도 같이 바뀐다. 페이지/내비
 # 구성보다 먼저 읽어야 render_top_navigation()의 헤더 색도 맞출 수 있다.
 #
-# 메뉴에서 테마를 바꾼 순간 곧바로 rerun이 안 걸릴 수 있어서(다음 상호작용 전까지
-# st.context.theme.type이 예전 값을 들고 있음), sync_theme_on_change()가 글자색
-# 밝기 변화를 감지해 그 자리에서 한 번 rerun을 강제한다.
-sync_theme_on_change()
-ui_theme = st.context.theme.type
+# st.context.theme.type은 메뉴에서 테마를 바꿔도(심지어 다른 위젯을 눌러도) 안
+# 갱신되고 로그아웃 후 재접속해야만 반영되는 문제가 있어서 안 쓴다. 대신
+# detect_ui_theme()가 우리 CSS가 안 건드리는 네이티브 ☰ 메뉴 요소의 실제 글자색을
+# 봐서 지금 테마를 직접 판정하고, 바뀐 걸 감지하면 그 자리에서 rerun까지 강제한다.
+ui_theme = detect_ui_theme()
 st.session_state["ui_theme"] = ui_theme
 
 # 로그인 전에는 기본 내비게이션을 숨긴 채 로그인 페이지만 등록한다. 로그인 후에는
