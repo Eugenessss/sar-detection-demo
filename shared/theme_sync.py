@@ -6,18 +6,20 @@ rerun이 곧바로 따라오지 않을 수 있다 -- 그러면 st.context.theme.
 작용(아무 버튼 클릭 등) 전까지는 계속 예전 값을 들고 있어서, app.py가 고르는
 assets/css/app-{light,dark}.css나 지도 색이 실제 화면과 어긋난 채로 멈춰 보인다.
 
-이 모듈은 화면에 안 보이는 CCv2 컴포넌트 하나로, 앱 배경색의 밝기를 400ms마다
-확인하다가(= st.context.theme.type이 배경색 밝기로 라이트/다크를 판정하는 것과
-같은 신호) 밝기가 명암 기준을 넘어 바뀌면 setTriggerValue로 Python에 알려 즉시
-한 번 rerun한다. 그 rerun에서는 이미 프론트엔드가 새 테마를 다 칠한 뒤이므로
-st.context.theme.type이 올바른 값을 돌려준다.
+이 모듈은 화면에 안 보이는 CCv2 컴포넌트 하나로, body의 글자색 밝기를 400ms마다
+확인하다가(= st.context.theme.type이 배경 밝기로 라이트/다크를 판정하는 것과 같은
+발상이지만, body의 background는 우리 CSS가 그라디언트로 깔아서 backgroundColor가
+항상 투명하게 읽히므로 대신 솔리드 값인 글자색(color)을 본다) 밝기가 명암 기준을
+넘어 바뀌면 setTriggerValue로 Python에 알려 즉시 한 번 rerun한다. 그 rerun에서는
+이미 프론트엔드가 새 테마를 다 칠한 뒤이므로 st.context.theme.type이 올바른 값을
+돌려준다.
 """
 import streamlit as st
 
 _JS = """
 function luminance() {
-  var bg = getComputedStyle(document.body).backgroundColor;
-  var m = bg.match(/\\d+(\\.\\d+)?/g);
+  var fg = getComputedStyle(document.body).color;
+  var m = fg.match(/\\d+(\\.\\d+)?/g);
   if (!m || m.length < 3) return null;
   var r = +m[0], g = +m[1], b = +m[2];
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;

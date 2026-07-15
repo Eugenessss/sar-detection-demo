@@ -29,6 +29,19 @@ st.set_page_config(
 
 auth_user = st.session_state.get("auth_user")
 
+# 라이트/다크 전환은 커스텀 버튼이 아니라 Streamlit 네이티브 테마 전환(오른쪽 위
+# ☰ 메뉴 > Settings > Choose app theme, .streamlit/config.toml의 [theme.light]/
+# [theme.dark])을 그대로 쓴다. st.dataframe 같은 캔버스 기반 위젯은 CSS로 못
+# 건드리는데, 저 메뉴로 실제 테마를 바꿔야만 그런 위젯도 같이 바뀐다. 페이지/내비
+# 구성보다 먼저 읽어야 render_top_navigation()의 헤더 색도 맞출 수 있다.
+#
+# 메뉴에서 테마를 바꾼 순간 곧바로 rerun이 안 걸릴 수 있어서(다음 상호작용 전까지
+# st.context.theme.type이 예전 값을 들고 있음), sync_theme_on_change()가 글자색
+# 밝기 변화를 감지해 그 자리에서 한 번 rerun을 강제한다.
+sync_theme_on_change()
+ui_theme = st.context.theme.type
+st.session_state["ui_theme"] = ui_theme
+
 # 로그인 전에는 기본 내비게이션을 숨긴 채 로그인 페이지만 등록한다. 로그인 후에는
 # 네이티브 상단 내비게이션(st.navigation(position="top"))이 역할별 페이지와 숨김
 # 상세 페이지를 함께 라우터에 등록한다. 로그아웃하면 다시 로그인 페이지만 등록되므로
@@ -106,22 +119,7 @@ else:
     # st.switch_page로 이동할 수 있다.
     pages = [*visible_pages, logout_page, *hidden_pages]
     st.session_state["_pages_by_url"] = {p.url_path: p for p in pages}
-    current_page = render_top_navigation(pages)
-
-# 라이트/다크 전환은 커스텀 버튼이 아니라 Streamlit 네이티브 테마 전환(오른쪽 위
-# ☰ 메뉴 > Settings > Choose app theme, .streamlit/config.toml의 [theme.light]/
-# [theme.dark])을 그대로 쓴다. st.dataframe 같은 캔버스 기반 위젯은 CSS로 못
-# 건드리는데, 저 메뉴로 실제 테마를 바꿔야만 그런 위젯도 같이 바뀐다. st.context.
-# theme.type으로 지금 활성 테마("light"/"dark")를 읽어, 우리 커스텀 CSS
-# (assets/css/app-{theme}.css)와 전술 지도 색을 여기에 맞춘다 -- 버튼이 하나 더
-# 있으면 이 메뉴랑 따로 놀아서 지도/표만 안 바뀌는 것처럼 보이므로 만들지 않는다.
-#
-# 메뉴에서 테마를 바꾼 순간 곧바로 rerun이 안 걸릴 수 있어서(다음 상호작용 전까지
-# st.context.theme.type이 예전 값을 들고 있음), sync_theme_on_change()가 배경색
-# 밝기 변화를 감지해 그 자리에서 한 번 rerun을 강제한다.
-sync_theme_on_change()
-ui_theme = st.context.theme.type
-st.session_state["ui_theme"] = ui_theme
+    current_page = render_top_navigation(pages, ui_theme)
 
 load_global_styles(ui_theme)
 current_page.run()
