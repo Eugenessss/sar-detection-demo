@@ -2,7 +2,16 @@
 [공용 - 로그인 인증]
 app_user 테이블(login_id/password_hash/role/is_active)로 로그인을 검증한다.
 분석관(ANALYST)/지휘관(COMMANDER) 역할에 따라 app.py가 다른 메뉴를 보여준다.
+
+세션 토큰(create_session_token/resolve_session_token/revoke_session_token)은
+st.session_state가 못 버티는 실제 브라우저 새로고침(shared/theme_sync.py가 테마
+전환 시 자동으로 거는 window.location.reload() 포함)에도 로그인이 풀리지 않게
+하려고 둔 것 — URL 쿼리스트링(?s=token)에 토큰만 남겨두면, 새로고침해도 URL은
+그대로라 로그인 상태를 복원할 수 있다. 토큰 자체엔 아무 개인정보도 없고
+(secrets.token_urlsafe라 추측 불가능), 서버 프로세스 메모리에만 사는 값이라
+서버가 재시작되면 자동으로 무효화된다.
 """
+import secrets
 from dataclasses import dataclass
 from typing import Optional
 
@@ -47,3 +56,29 @@ def authenticate(login_id: str, password: str) -> Optional[AuthUser]:
         user_name=m["user_name"],
         role=m["role"],
     )
+
+
+# 토큰 -> 로그인 사용자. 서버 프로세스 메모리에만 있고 DB에 안 남는다 (재시작하면
+# 다 풀린다 -- 이 프로젝트 규모에서는 그걸로 충분하고, 여러 워커로 나눠 돌리는
+# 배포는 애초에 고려 대상이 아니다).
+_ACTIVE_TOKENS: dict[str, AuthUser] = {}
+
+
+def create_session_token(user: AuthUser) -> str:
+    """로그인 성공 시 발급한다. 호출한 쪽이 st.query_params["s"]에 넣어둬야 한다."""
+    token = secrets.token_urlsafe(24)
+    _ACTIVE_TOKENS[token] = user
+    return token
+
+
+def resolve_session_token(token: Optional[str]) -> Optional[AuthUser]:
+    """URL의 ?s= 토큰으로 로그인 사용자를 복원한다 (없거나 무효하면 None)."""
+    if not token:
+        return None
+    return _ACTIVE_TOKENS.get(token)
+
+
+def revoke_session_token(token: Optional[str]) -> None:
+    """로그아웃 시 토큰을 무효화한다."""
+    if token:
+        _ACTIVE_TOKENS.pop(token, None)

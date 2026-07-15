@@ -15,6 +15,7 @@ from features.statistics.view import render_statistics_page
 from features.EOSAR_compare.view import render_eosar_compare_page
 from features.ANALYST_DESK.view import render_hq_desk_page as render_analyst_desk_page
 from login import render_login_page
+from shared.auth import resolve_session_token, revoke_session_token
 from shared.theme_sync import install_theme_reload_hook
 from shared.ui.navigation import render_top_navigation
 from shared.ui.styles import load_global_styles
@@ -28,6 +29,13 @@ st.set_page_config(
 )
 
 auth_user = st.session_state.get("auth_user")
+if auth_user is None:
+    # 테마 전환이 자동으로 거는 새로고침(shared/theme_sync.py) 등 실제 브라우저
+    # 새로고침은 새 세션이라 st.session_state가 비워진다 -- URL의 ?s= 토큰으로
+    # 로그인 상태를 복원한다 (URL은 새로고침해도 그대로 남는다).
+    auth_user = resolve_session_token(st.query_params.get("s"))
+    if auth_user is not None:
+        st.session_state["auth_user"] = auth_user
 
 # 라이트/다크 전환은 커스텀 버튼이 아니라 Streamlit 네이티브 테마 전환(오른쪽 위
 # ☰ 메뉴 > Settings > Choose app theme, .streamlit/config.toml의 [theme.light]/
@@ -104,6 +112,8 @@ else:
     ]
 
     def _logout() -> None:
+        revoke_session_token(st.query_params.get("s"))
+        st.query_params.pop("s", None)
         st.session_state.pop("auth_user", None)
         st.session_state.pop("_pages_by_url", None)
         st.rerun()
