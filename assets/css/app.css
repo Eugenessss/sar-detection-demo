@@ -1002,7 +1002,26 @@ iframe[title="streamlit_folium.st_folium"] {
   inset: 0;
   z-index: 999;
   overflow-y: auto;
-  background: var(--ui-bg);
+  background: #04070f;   /* 이미지 로드 전 어두운 폴백 */
+}
+
+/* 화면 전체를 덮는 야간 위성 배경 + 좌측을 어둡게 눌러 히어로 텍스트 가독성 확보 */
+.ui-login-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+
+.ui-login-bg::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(90deg, rgba(3, 7, 18, 0.90) 0%, rgba(3, 7, 18, 0.60) 44%, rgba(3, 7, 18, 0.30) 100%),
+    linear-gradient(0deg, rgba(3, 7, 18, 0.55) 0%, rgba(3, 7, 18, 0) 42%);
 }
 
 .st-key-login_page > div,
@@ -1010,7 +1029,10 @@ iframe[title="streamlit_folium.st_folium"] {
   width: 100%;
 }
 
+/* 컬럼(히어로/폼)은 배경 레이어 위로 */
 .st-key-login_page [data-testid="stHorizontalBlock"] {
+  position: relative;
+  z-index: 1;
   min-height: 100vh;
   align-items: stretch;
   gap: 0;
@@ -1037,79 +1059,54 @@ iframe[title="streamlit_folium.st_folium"] {
   position: relative;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
   min-height: 100vh;
-  padding: 52px clamp(40px, 4.5vw, 76px);
-  border-right: 1px solid #cfe0f5;
-  background:
-    radial-gradient(circle at 78% 22%, rgba(14, 165, 233, 0.18), transparent 30%),
-    radial-gradient(circle at 18% 78%, rgba(37, 99, 235, 0.13), transparent 34%),
-    linear-gradient(145deg, #ffffff 0%, #edf5ff 52%, #f8fbff 100%);
+  padding: 56px clamp(40px, 4.5vw, 84px);
+  color: #eaf2ff;
 }
 
-.ui-login-orbit {
-  position: absolute;
-  top: 54px;
-  right: -72px;
-  width: 310px;
-  height: 310px;
-  border: 1px solid rgba(37, 99, 235, 0.18);
-  border-radius: 50%;
-}
-
-.ui-login-orbit::before,
-.ui-login-orbit::after {
-  position: absolute;
-  border: 1px solid rgba(14, 165, 233, 0.18);
-  border-radius: 50%;
-  content: "";
-}
-
-.ui-login-orbit::before { inset: 38px; }
-.ui-login-orbit::after { inset: 88px; background: rgba(255, 255, 255, 0.4); }
-
-.ui-login-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 11px;
-  color: var(--ui-navy);
-  font-size: 14px;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-}
-
-/* ARGOS 로고 PNG는 흰 배경이라, 히어로 그라데이션 위에서는 흰 타일로 감싼다. */
-.ui-login-brand-mark {
+/* 다크 배경용 ARGOS 로고(흰 락업, 투명 배경)를 히어로 상단에 크게 얹는다.
+   배경이 투명이라 위성 야간 배경 위에 박스 없이 자연스럽게 녹는다. */
+.ui-login-logo {
+  position: relative;
   display: block;
-  width: 44px;
-  height: 44px;
-  padding: 4px;
-  border: 1px solid #d8e5f4;
-  border-radius: 12px;
-  background: #ffffff;
+  height: 84px;
+  width: auto;
+  max-width: 82%;
+  margin-bottom: 16px;
   object-fit: contain;
-  box-shadow: 0 9px 24px rgba(37, 99, 235, 0.16);
+  filter: drop-shadow(0 8px 26px rgba(0, 0, 0, 0.5));
+}
+
+.ui-login-eyebrow {
+  position: relative;
+  color: rgba(207, 227, 255, 0.9);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.4);
 }
 
 /* 브랜드는 상단, 기능 태그는 하단에 고정하고 제목·설명은 그 사이 중앙에 놓는다. */
 .ui-login-hero h1 {
   position: relative;
-  max-width: 620px;
-  margin: auto 0 20px;
-  color: var(--ui-text);
-  font-size: clamp(38px, 4vw, 62px);
+  max-width: 640px;
+  margin: auto 0 22px;
+  color: #f6faff;
+  font-size: clamp(40px, 4.2vw, 64px);
   font-weight: 850;
-  line-height: 1.08;
+  line-height: 1.07;
+  text-shadow: 0 6px 34px rgba(0, 0, 0, 0.5);
 }
 
-.ui-login-hero h1 span { color: var(--ui-primary); }
+.ui-login-hero h1 span { color: #74b8ff; }
 
 .ui-login-hero p {
   position: relative;
   max-width: 560px;
-  color: #52657a;
+  color: rgba(220, 233, 255, 0.82);
   font-size: 15px;
-  line-height: 1.8;
+  line-height: 1.85;
+  text-shadow: 0 2px 16px rgba(0, 0, 0, 0.45);
 }
 
 .ui-login-features {
@@ -1118,45 +1115,97 @@ iframe[title="streamlit_folium.st_folium"] {
   flex-wrap: wrap;
   gap: 9px;
   margin-top: auto;
-  padding-top: 42px;
+  padding-top: 44px;
 }
 
 .ui-login-features span {
-  padding: 8px 11px;
-  border: 1px solid rgba(37, 99, 235, 0.14);
+  padding: 8px 13px;
+  border: 1px solid rgba(255, 255, 255, 0.20);
   border-radius: 999px;
-  color: #385574;
-  background: rgba(255, 255, 255, 0.72);
+  color: #e4eeff;
+  background: rgba(255, 255, 255, 0.08);
   font-size: 11px;
   font-weight: 700;
-  backdrop-filter: blur(8px);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
+/* 유리질(frosted glass) 로그인 카드 — 공용 흰 카드 규칙을 덮어쓴다. */
 .st-key-login_card {
   width: 100%;
-  padding: 36px 34px 30px;
-  box-shadow: var(--ui-shadow);
+  padding: 38px 34px 30px;
+  border: 1px solid rgba(255, 255, 255, 0.22) !important;
+  border-radius: 22px !important;
+  background: rgba(255, 255, 255, 0.09) !important;
+  box-shadow: 0 34px 90px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  backdrop-filter: blur(22px) saturate(1.15);
+  -webkit-backdrop-filter: blur(22px) saturate(1.15);
 }
 
 .ui-login-card-logo {
   display: block;
-  height: 52px;
-  margin-bottom: 12px;
+  height: 36px;
+  margin-bottom: 14px;
   object-fit: contain;
+  filter: drop-shadow(0 6px 18px rgba(0, 0, 0, 0.35));
 }
 
 .ui-login-card-heading h2 {
   margin: 0;
-  color: var(--ui-text);
+  color: #ffffff;
   font-size: 27px;
   font-weight: 820;
 }
 
 .ui-login-card-heading p {
   margin: 9px 0 24px;
-  color: var(--ui-muted);
+  color: rgba(223, 234, 251, 0.72);
   font-size: 13px;
   line-height: 1.6;
+}
+
+/* 카드 안 입력 필드: 어두운 반투명 필드 + 밝은 글자. */
+.st-key-login_card [data-testid="stTextInput"] label {
+  color: rgba(233, 241, 255, 0.88);
+  font-weight: 600;
+}
+
+.st-key-login_card [data-testid="stTextInput"] [data-baseweb="input"],
+.st-key-login_card [data-testid="stTextInput"] [data-baseweb="base-input"] {
+  background: rgba(6, 12, 26, 0.55) !important;
+  border-color: rgba(255, 255, 255, 0.20) !important;
+}
+
+.st-key-login_card [data-testid="stTextInput"] input {
+  color: #f3f8ff !important;
+  -webkit-text-fill-color: #f3f8ff !important;
+}
+
+.st-key-login_card [data-testid="stTextInput"] input::placeholder {
+  color: rgba(220, 233, 255, 0.42) !important;
+}
+
+.st-key-login_card [data-testid="stTextInput"] button {
+  color: rgba(220, 233, 255, 0.70) !important;
+}
+
+/* 로그인 버튼: 유리 카드 위에서 도드라지는 강조색 CTA. */
+.st-key-login_card [data-testid="stFormSubmitButton"] button {
+  border: none !important;
+  color: #ffffff !important;
+  background: linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%) !important;
+  box-shadow: 0 14px 32px rgba(37, 99, 235, 0.45) !important;
+  font-weight: 750 !important;
+}
+
+.st-key-login_card [data-testid="stFormSubmitButton"] button:hover {
+  filter: brightness(1.07);
+  box-shadow: 0 16px 38px rgba(37, 99, 235, 0.55) !important;
+}
+
+.st-key-login_card [data-testid="stFormSubmitButton"] button p,
+.st-key-login_card [data-testid="stFormSubmitButton"] button span {
+  color: #ffffff !important;
 }
 
 .ui-security-note {
@@ -1164,9 +1213,10 @@ iframe[title="streamlit_folium.st_folium"] {
   gap: 9px;
   margin-top: 18px;
   padding: 12px 13px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 11px;
-  color: #52657a;
-  background: #f8fafc;
+  color: rgba(220, 233, 255, 0.72);
+  background: rgba(255, 255, 255, 0.05);
   font-size: 11px;
   line-height: 1.55;
 }

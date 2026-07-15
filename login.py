@@ -12,7 +12,12 @@ import streamlit as st
 
 from shared.auth import authenticate
 
-_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "images" / "argos_logo_small.png"
+_ASSETS = Path(__file__).resolve().parent / "assets" / "images"
+# 다크 배경용 ARGOS 로고(흰 락업, 여백 트림 + 배경 투명). 위성 야간 배경 위에 박스 없이 얹힌다.
+_LOGO_PATH = _ASSETS / "argos_logo_wide_ondark.png"
+# 로그인 배경(야간 위성사진 톤). 실제 위성 사진으로 바꾸려면 이 파일만 교체하면 된다
+# (SVG 대신 JPG/PNG를 쓰면 아래 _bg_data_uri의 MIME 타입만 맞춰주면 됨).
+_LOGIN_BG_PATH = _ASSETS / "login-bg.svg"
 
 
 @lru_cache(maxsize=1)
@@ -21,21 +26,30 @@ def _logo_data_uri() -> str:
     return "data:image/png;base64," + base64.b64encode(_LOGO_PATH.read_bytes()).decode("ascii")
 
 
+@lru_cache(maxsize=1)
+def _bg_data_uri() -> str:
+    """로그인 배경 SVG를 CSS url()에 바로 넣을 data URI로 만든다 (프로세스당 1회)."""
+    return "data:image/svg+xml;base64," + base64.b64encode(_LOGIN_BG_PATH.read_bytes()).decode("ascii")
+
+
 def render_login_page() -> None:
     """아이디/비밀번호 입력 폼을 그리고, 성공하면 세션에 로그인 사용자를 저장한다."""
     with st.container(key="login_page"):
+        # 화면 전체를 덮는 야간 위성 배경 레이어(어두운 오버레이는 CSS ::after가 얹는다).
+        st.html(
+            f'<div class="ui-login-bg" aria-hidden="true" '
+            f"style=\"background-image:url('{_bg_data_uri()}')\"></div>"
+        )
+
         hero_col, form_col = st.columns([1, 1], gap="small")
 
         with hero_col:
             st.html(
                 f"""
                 <section class="ui-login-hero">
-                  <div class="ui-login-orbit" aria-hidden="true"></div>
-                  <div class="ui-login-brand">
-                    <img class="ui-login-brand-mark" src="{_logo_data_uri()}" alt="ARGOS">
-                    <span>청출어람 위성정보 시스템</span>
-                  </div>
-                  <h1>더 빠르고 정확한<br><span>위성정보 판독</span></h1>
+                  <img class="ui-login-logo" src="{_logo_data_uri()}" alt="ARGOS">
+                  <div class="ui-login-eyebrow">청출어람 위성정보 시스템</div>
+                  <h1>EO/SAR 영상 분석<br><span>ARGOS</span></h1>
                   <p>
                     EO·SAR 영상과 탐지 결과, 변화 경보를 하나의 작전 화면에서 확인하고
                     분석관과 지휘관의 판단 흐름을 안전하게 연결합니다.
