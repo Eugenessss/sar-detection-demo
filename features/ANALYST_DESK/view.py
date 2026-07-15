@@ -111,8 +111,11 @@ def _render_region_chart(region: str, overlay_data, start, end) -> None:
     촬영 주기가 2시간이므로 X축 틱도 2시간 간격으로 고정하고, 축 범위는 조회 창
     [start, end] 전체로 잡아 데이터가 한쪽에 몰려도 창이 온전히 보이게 한다.
     데이터 시점이 많지 않아 선만으로는 놓치기 쉬워 각 시점에 점을 함께 찍는다.
+    지역마다 창의 절대 시각이 다를 수 있어(각자 마지막 촬영 기준) 창 범위를
+    캡션으로 함께 적어 축이 어긋나 보이는 것을 숨기지 않고 명시한다.
     """
     st.markdown(f"**{region}**")
+    st.caption(f"{start:%Y-%m-%d %H:%M} ~ {end:%Y-%m-%d %H:%M} · 마지막 촬영 시점 기준 24시간")
     if overlay_data.empty:
         st.info(f"{region}: 이 기간에 표시할 통계가 없습니다.")
         return
@@ -155,52 +158,54 @@ def _render_statistics_detail_button() -> None:
 
 
 def _render_statistics_column() -> None:
-    """오른쪽 칸: 조회 시점(현재 시각) 기준 최근 24시간 탐지 추이를 지역(개풍군/원산시)별로
-    위아래 두 그래프로 보여주고, 그 아래에 상세 통계 페이지로 이동하는 버튼을 둔다."""
+    """오른쪽 칸: 지역(개풍군/원산시)별 24시간 탐지 추이를 위아래 두 그래프로 보여주고,
+    그 아래에 상세 통계 페이지로 이동하는 버튼을 둔다.
+
+    지역마다 촬영 주기가 어긋날 수 있어(예: 한 지역만 데이터가 하루 최신), 전역 최신
+    한 시점으로 창을 잡으면 뒤처진 지역이 통째로 빠진다. 그래서 각 지역을 '그 지역의
+    마지막 촬영시각 기준 24시간'으로 따로 잡아, 두 지역이 항상 각자 그려지게 한다.
+    대신 창의 절대 시각이 지역마다 다를 수 있으므로 각 차트에 창 범위를 캡션으로 명시한다.
+    """
     render_section_header(
-        "최근 24시간 탐지 추이",
-        "지역별 실제 탐지 건수와 2시간 구간 평균을 비교합니다.",
+        "지역별 24시간 탐지 추이",
+        "지역마다 마지막 촬영 시점 기준 24시간의 실제 탐지와 2시간 구간 평균을 비교합니다.",
         badge="24 HOURS",
     )
 
-    now = datetime.datetime.now()
-    start, end = stats_service.resolve_range(now - datetime.timedelta(hours=24), "24시간")
+    try:
+        region_latest = stats_service.latest_captured_time_by_region()
+    except Exception as exc:
+        st.error(f"통계 조회 실패: {exc}")
+        _render_statistics_detail_button()
+        return
 
-    result = None
-    anchored = False   # 최근 24시간 대신 마지막 촬영 시점 기준 창을 쓰고 있는지
-    query_failed = False
+    if not region_latest:
+        st.warning("조회된 탐지 결과가 없습니다.")
+        _render_statistics_detail_button()
+        return
+
     with st.spinner("통계 조회 중..."):
-        try:
+        for region in sorted(region_latest):
+            latest = region_latest[region]
+            start, end = stats_service.resolve_range(
+                latest - datetime.timedelta(hours=24), "24시간"
+            )  # end == latest (그 지역의 마지막 촬영시각)
             result = stats_service.build_statistics(start, end)
             if result is None:
-                # 최근 24시간 내 촬영분이 없으면(데모처럼 과거 촬영 데이터만 있는 경우)
-                # 마지막 촬영시각을 끝점으로 한 24시간 창을 대신 보여줘 첫 화면이 비지 않게 한다.
-                latest = stats_service.latest_captured_time()
-                if latest is not None:
-                    start, end = stats_service.resolve_range(
-                        latest - datetime.timedelta(hours=24), "24시간"
-                    )
-                    result = stats_service.build_statistics(start, end)
-                    anchored = result is not None
-        except Exception as exc:
-            st.error(f"통계 조회 실패: {exc}")
-            query_failed = True
-
-    range_caption = f"{start:%Y-%m-%d %H:%M} ~ {end:%Y-%m-%d %H:%M}"
-    if anchored:
-        range_caption += " · 최근 24시간 내 탐지가 없어 마지막 촬영 시점 기준으로 표시"
-    st.caption(range_caption)
-
-    if not query_failed:
-        if result is None:
-            st.warning("조회된 탐지 결과가 없습니다.")
-        else:
-            # 지역 필터 대신 데이터에 있는 지역(개풍군/원산시)마다 그래프를 하나씩
-            # 세로로 쌓는다 — 두 작전지역을 클릭 없이 한눈에 비교할 수 있다.
-            regions = sorted(result.raw["region_name"].dropna().unique())
-            for region in regions:
-                overlay_data = stats_service.build_two_hour_overlay(result.raw, start, end, region)
-                _render_region_chart(region, overlay_data, start, end)
+                st.markdown(f"**{region}**")
+                st.caption(
+                    f"{start:%Y-%m-%d %H:%M} ~ {end:%Y-%m-%d %H:%M} · 마지막 촬영 시점 기준 24시간"
+                )
+                st.info(f"{region}: 이 기간에 표시할 통계가 없습니다.")
+                continue
+            # build_two_hour_overlay는 창 끝(end=최신 촬영시각)의 점을 `< end`로 잘라낸다.
+            # 그 최신 점이 그래프에서 사라지지 않도록(특히 신규 촬영 1건만 든 지역)
+            # overlay 계산에는 끝을 1초 넘겨 최신 점까지 포함시키되, 차트 축 범위는
+            # 깔끔한 2시간 눈금을 위해 end(=latest) 그대로 쓴다.
+            overlay_data = stats_service.build_two_hour_overlay(
+                result.raw, start, end + datetime.timedelta(seconds=1), region
+            )
+            _render_region_chart(region, overlay_data, start, end)
 
     _render_statistics_detail_button()
 

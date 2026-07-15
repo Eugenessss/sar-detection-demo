@@ -39,6 +39,23 @@ def fetch_latest_captured_time() -> Optional[datetime]:
     return row[0] if row and row[0] is not None else None
 
 
+def fetch_latest_captured_time_by_region() -> Dict[str, datetime]:
+    """지역별 가장 최근 촬영시각을 {region_name: captured_time}으로 돌려준다.
+
+    분석 현황의 지역별 24시간 추이가 지역마다 자기 마지막 촬영 시점을 끝점으로
+    창을 잡을 때 쓴다 (지역별 촬영 주기가 어긋나도 각 지역이 항상 그려지도록)."""
+    with get_engine().connect() as conn:
+        rows = conn.execute(
+            text(
+                f"SELECT region_name, MAX(captured_time) "
+                f"FROM `{_DB}`.`image_analysis` "
+                f"WHERE region_name IS NOT NULL "
+                f"GROUP BY region_name"
+            )
+        ).fetchall()
+    return {row[0]: row[1] for row in rows if row[1] is not None}
+
+
 def fetch_regions() -> List[str]:
     """image_analysis에 있는 지역(region_name) 목록을 중복 없이 돌려준다 (위치 필터용)."""
     with get_engine().connect() as conn:

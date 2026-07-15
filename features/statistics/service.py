@@ -15,6 +15,7 @@ from features.statistics.repository import (
     fetch_detection_stats,
     fetch_equipment_classes,
     fetch_latest_captured_time,
+    fetch_latest_captured_time_by_region,
     fetch_regions,
 )
 
@@ -52,6 +53,14 @@ def latest_captured_time() -> Optional[datetime]:
     마지막 촬영 시점 기준 창으로 대신 보여주는 fallback에 쓴다.
     """
     return fetch_latest_captured_time()
+
+
+def latest_captured_time_by_region() -> Dict[str, datetime]:
+    """지역별 마지막 촬영시각을 {region_name: captured_time}으로 돌려준다.
+
+    분석 현황의 지역별 24시간 추이가 지역마다 자기 최신 촬영 시점 기준으로 창을
+    잡을 때 쓴다 (지역 간 촬영 주기가 어긋나도 각 지역이 항상 그려지도록)."""
+    return fetch_latest_captured_time_by_region()
 
 
 def resolve_range(start: datetime, interval_label: str) -> Tuple[datetime, datetime]:
