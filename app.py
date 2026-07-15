@@ -107,5 +107,21 @@ else:
     st.session_state["_pages_by_url"] = {p.url_path: p for p in pages}
     current_page = render_top_navigation(pages)
 
-load_global_styles()
+# 라이트/다크 전환: assets/css/app-{theme}.css 두 벌 중 하나를 통째로 골라 넣는다
+# (shared/ui/styles.py 참고 -- 토큰 하나만 바꾸는 대신 완전히 분리된 파일을 쓴다).
+# 토글 버튼은 페이지 콘텐츠 맨 위, 오른쪽 끝에 둔다 -- 로그인 화면을 포함해 항상 보인다.
+st.session_state.setdefault("ui_theme", "dark")
+_, theme_toggle_col = st.columns([0.94, 0.06])
+with theme_toggle_col:
+    _is_dark = st.session_state["ui_theme"] == "dark"
+    if st.button(
+        "",
+        icon=":material/light_mode:" if _is_dark else ":material/dark_mode:",
+        help="라이트 테마로 전환" if _is_dark else "다크 테마로 전환",
+        key="ui_theme_toggle",
+    ):
+        st.session_state["ui_theme"] = "light" if _is_dark else "dark"
+        st.rerun()
+
+load_global_styles(st.session_state["ui_theme"])
 current_page.run()
