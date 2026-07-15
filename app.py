@@ -107,21 +107,15 @@ else:
     st.session_state["_pages_by_url"] = {p.url_path: p for p in pages}
     current_page = render_top_navigation(pages)
 
-# 라이트/다크 전환: assets/css/app-{theme}.css 두 벌 중 하나를 통째로 골라 넣는다
-# (shared/ui/styles.py 참고 -- 토큰 하나만 바꾸는 대신 완전히 분리된 파일을 쓴다).
-# 토글 버튼은 페이지 콘텐츠 맨 위, 오른쪽 끝에 둔다 -- 로그인 화면을 포함해 항상 보인다.
-st.session_state.setdefault("ui_theme", "dark")
-_, theme_toggle_col = st.columns([0.94, 0.06])
-with theme_toggle_col:
-    _is_dark = st.session_state["ui_theme"] == "dark"
-    if st.button(
-        "",
-        icon=":material/light_mode:" if _is_dark else ":material/dark_mode:",
-        help="라이트 테마로 전환" if _is_dark else "다크 테마로 전환",
-        key="ui_theme_toggle",
-    ):
-        st.session_state["ui_theme"] = "light" if _is_dark else "dark"
-        st.rerun()
+# 라이트/다크 전환은 커스텀 버튼이 아니라 Streamlit 네이티브 테마 전환(오른쪽 위
+# ☰ 메뉴 > Settings > Choose app theme, .streamlit/config.toml의 [theme.light]/
+# [theme.dark])을 그대로 쓴다. st.dataframe 같은 캔버스 기반 위젯은 CSS로 못
+# 건드리는데, 저 메뉴로 실제 테마를 바꿔야만 그런 위젯도 같이 바뀐다. st.context.
+# theme.type으로 지금 활성 테마("light"/"dark")를 읽어, 우리 커스텀 CSS
+# (assets/css/app-{theme}.css)와 전술 지도 색을 여기에 맞춘다 -- 버튼이 하나 더
+# 있으면 이 메뉴랑 따로 놀아서 지도/표만 안 바뀌는 것처럼 보이므로 만들지 않는다.
+ui_theme = st.context.theme.type
+st.session_state["ui_theme"] = ui_theme
 
-load_global_styles(st.session_state["ui_theme"])
+load_global_styles(ui_theme)
 current_page.run()

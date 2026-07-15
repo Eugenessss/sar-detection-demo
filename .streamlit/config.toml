@@ -1,19 +1,37 @@
 [theme]
-base = "dark"
+font = "sans-serif"
+baseRadius = "large"
+showWidgetBorder = true
+
+# 두 벌 다 정의해두면 Streamlit이 네이티브로 라이트/다크 전환을 지원한다 (☰ 메뉴 >
+# Settings > Choose app theme). st.dataframe처럼 커스텀 CSS로 못 건드리는(캔버스로
+# 그리는) 위젯은 이 네이티브 테마를 통해서만 실제로 색이 바뀐다 -- app.py가
+# st.context.theme.type을 읽어 assets/css/app-{light,dark}.css와 지도 색도 여기에
+# 맞춘다. base/chartCategoricalColors는 [theme.light]/[theme.dark] 안에서는 유효한
+# 옵션이 아니라([theme] 최상위 전용) 여기 안 넣는다 -- 대신 Streamlit이 라이트/다크마다
+# 자체 기본 차트 색상을 쓴다.
+[theme.dark]
 primaryColor = "#4F8CFF"
 backgroundColor = "#0A0E14"
 secondaryBackgroundColor = "#131922"
 textColor = "#E7EDF5"
-font = "sans-serif"
-baseRadius = "large"
-showWidgetBorder = true
 borderColor = "#223140"
 dataframeBorderColor = "#223140"
 dataframeHeaderBackgroundColor = "#0F151D"
-chartCategoricalColors = ["#4F8CFF", "#38BDF8", "#34D399", "#FBBF24", "#F87171", "#A78BFA"]
+
+[theme.light]
+primaryColor = "#2563EB"
+backgroundColor = "#F4F7FB"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#0F172A"
+borderColor = "#DCE4EE"
+dataframeBorderColor = "#DCE4EE"
+dataframeHeaderBackgroundColor = "#F8FAFC"
 
 [client]
-toolbarMode = "minimal"
+# "minimal"은 ☰ 메뉴 자체를 숨겨서 라이트/다크 전환 메뉴에 손을 댈 수 없다.
+# "viewer"는 개발자 옵션(Rerun/Clear cache 등) 없이 Settings(테마 전환 포함)만 남긴다.
+toolbarMode = "viewer"
 
 [browser]
 gatherUsageStats = false

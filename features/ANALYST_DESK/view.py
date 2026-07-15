@@ -65,6 +65,7 @@ def _render_map_column(default_alerts: list | None = None) -> None:
         marker_label=service.marker_label,
         height=530,
         key="analyst_tactical_map",
+        theme=st.session_state.get("ui_theme", "dark"),
     )
     if clicked_alert_id is not None:
         eosar_page = st.session_state.get("_pages_by_url", {}).get("eosar")

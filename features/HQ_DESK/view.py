@@ -61,6 +61,7 @@ def _render_map(
         marker_label=service.marker_label,
         height=_MAP_HEIGHT_PX,
         key="hq_tactical_map",
+        theme=st.session_state.get("ui_theme", "dark"),
     )
     if clicked_alert_id is not None:
         st.session_state["selected_alert_id"] = clicked_alert_id
