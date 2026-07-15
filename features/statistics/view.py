@@ -78,19 +78,25 @@ def render_period_controls() -> tuple:
     """왼쪽 칸: 시작 일시(연/월/일/시 선택)·기간 선택 버튼·조회범위 안내를 세로로 몰아 그리고, (시작시각, 종료시각)을 돌려준다."""
     today = datetime.date.today()
     if "stats_start_year" not in st.session_state:
-        # 첫 진입 기본 시작일은 데이터가 있는 마지막 촬영일로 잡는다 — 오늘 날짜로
-        # 시작하면 과거 촬영분(데모 데이터)뿐일 때 빈 경고만 보이기 때문.
+        # 첫 진입 기본 조회 창은 "마지막 촬영일을 포함한 최근 <기본기간>"으로 잡는다.
+        # resolve_range는 시작에서 기간만큼 앞(미래)으로 뻗으므로, 마지막 촬영일을 그대로
+        # 시작으로 두면 창이 빈 미래로 향해 첫 화면이 비어 보인다. 그래서 창이 마지막
+        # 촬영일 다음 0시에 끝나도록(=그 날 데이터까지 포함) 시작일을 기간만큼 뒤로 당긴다.
         try:
             anchor = service.latest_captured_time()
         except Exception:
             anchor = None
-        base = anchor.date() if anchor is not None else today
-        if base.year < today.year - 5:   # 연 선택지 범위(최근 5년) 밖이면 오늘로 되돌린다
-            base = today
-        st.session_state.stats_start_year = base.year
-        st.session_state.stats_start_month = base.month
-        st.session_state.stats_start_day = base.day
-        st.session_state.stats_start_hour = 0
+        anchor_date = anchor.date() if anchor is not None else today
+        if anchor_date.year < today.year - 5:   # 연 선택지 범위(최근 5년) 밖이면 오늘 기준
+            anchor_date = today
+        window_end = datetime.datetime.combine(anchor_date, datetime.time()) + datetime.timedelta(days=1)
+        base_start = window_end - service.INTERVALS[service.DEFAULT_INTERVAL]
+        if base_start.year < today.year - 5:   # 당긴 시작이 연 선택지 밖이면 촬영일 당일로
+            base_start = datetime.datetime.combine(anchor_date, datetime.time())
+        st.session_state.stats_start_year = base_start.year
+        st.session_state.stats_start_month = base_start.month
+        st.session_state.stats_start_day = base_start.day
+        st.session_state.stats_start_hour = base_start.hour
 
     st.markdown("**시작 일시**")
     year_col, month_col, day_col, hour_col = st.columns(4)
@@ -184,7 +190,11 @@ def _render_actual_vs_average_chart(
 
 
 def _render_time_series_chart(time_series) -> None:
-    """피벗(촬영시각 × 장비) 시계열을 오버레이 차트와 같은 팔레트·축 스타일로 그린다."""
+    """피벗(촬영시각 × 장비) 시계열을 오버레이 차트와 같은 팔레트·축 스타일로 그린다.
+
+    촬영시각이 희소하면(예: 두 지역 데이터가 하루씩 떨어져 있으면) 선만으로는 긴 공백을
+    직선으로 이어 실제 추이처럼 오해되기 쉬우므로, 실제 데이터 지점마다 점을 함께 찍어
+    어디가 실측이고 어디가 보간 구간인지 구분되게 한다(분석 현황 지역별 차트와 동일)."""
     if time_series.empty:
         st.info("해당 기간에 표시할 통계가 없습니다.")
         return
@@ -193,7 +203,7 @@ def _render_time_series_chart(time_series) -> None:
     )
     chart = (
         alt.Chart(data)
-        .mark_line()
+        .mark_line(point=True)
         .encode(
             x=alt.X("captured_time:T", title="촬영시각"),
             y=alt.Y("detected_count:Q", title="탐지 수"),
