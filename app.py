@@ -15,6 +15,7 @@ from features.statistics.view import render_statistics_page
 from features.EOSAR_compare.view import render_eosar_compare_page
 from features.ANALYST_DESK.view import render_hq_desk_page as render_analyst_desk_page
 from login import render_login_page
+from shared.theme_sync import sync_theme_on_change
 from shared.ui.navigation import render_top_navigation
 from shared.ui.styles import load_global_styles
 
@@ -114,6 +115,11 @@ else:
 # theme.type으로 지금 활성 테마("light"/"dark")를 읽어, 우리 커스텀 CSS
 # (assets/css/app-{theme}.css)와 전술 지도 색을 여기에 맞춘다 -- 버튼이 하나 더
 # 있으면 이 메뉴랑 따로 놀아서 지도/표만 안 바뀌는 것처럼 보이므로 만들지 않는다.
+#
+# 메뉴에서 테마를 바꾼 순간 곧바로 rerun이 안 걸릴 수 있어서(다음 상호작용 전까지
+# st.context.theme.type이 예전 값을 들고 있음), sync_theme_on_change()가 배경색
+# 밝기 변화를 감지해 그 자리에서 한 번 rerun을 강제한다.
+sync_theme_on_change()
 ui_theme = st.context.theme.type
 st.session_state["ui_theme"] = ui_theme
 
