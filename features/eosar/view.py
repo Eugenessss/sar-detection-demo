@@ -17,10 +17,12 @@ DB 저장 규칙은 SAR/EO 페이지와 동일하다 (공용 shared/image_store 
     기록한다 (업로드 실패 시 DB에 아무것도 남지 않음). 과거 image_id 이름(8199.png 등)으로
     저장된 객체는 DB가 그 경로를 기억하므로 조회에 문제없다.
 
-화면 배치 (Streamlit 기본 위젯만 사용, HTML/CSS 없음):
-  - 왼쪽(넓게): 이미지 영역 — 실행 전에는 ARGOS 로고, 실행 후에는 박스가 그려진 탐지 이미지.
-  - 오른쪽: 입력(업로드·모델 상태·회전·실행) → 요약 → 검출 목록(편집) → DB 저장.
-    이미지가 커도 DB 저장 칸이 화면 밖으로 밀려나지 않도록 오른쪽 열에 모아두었다.
+화면 배치:
+  - 상단: 워크플로 진행 바(+일일 체크리스트 팝오버) → 원본 선택 카드.
+  - 왼쪽(넓게): 고정 높이 영상 뷰어 — 선택 전 빈 안내, 선택 후 원본 미리보기,
+    실행 후 박스가 그려진 탐지 이미지 (이미지 크기와 무관하게 페이지 높이가 일정).
+  - 오른쪽(워크플로 레일): 요약 → 검출 목록(편집) → DB 저장 → 보고서.
+    판독 업무가 오른쪽 한 열에서 위에서 아래로 끝난다.
 """
 import base64
 import io
@@ -64,6 +66,7 @@ _SESSION_SENSOR_KEY = "eosar_last_sensor"          # 마지막 실행에 쓴 센
 _SESSION_UPLOAD_NAME_KEY = "eosar_last_upload_name"
 _SESSION_FILE_BYTES_KEY = "eosar_last_file_bytes"  # 원본 저장용으로 업로드 바이트를 보관
 _SESSION_FLASH_KEY = "eosar_flash_message"         # 수정/삭제/추가 후 rerun에서 보여줄 안내
+_SESSION_SAVED_NAME_KEY = "eosar_saved_name"       # 마지막으로 DB 저장까지 마친 파일명 (워크플로 04 표시용)
 
 _DB = "satellite_intel"
 
@@ -172,28 +175,37 @@ def _render_header() -> None:
     )
 
 
-def _render_workflow_bar() -> None:
-    """판독 업무의 순서를 페이지 상단에 고정된 시각 흐름으로 보여준다."""
-    st.html(
-        """
-        <nav class="ui-workflow" aria-label="EO/SAR 판독 작업 순서">
-          <div class="ui-workflow-step">
-            <b>01</b><span><small>SELECT</small>원본 선택</span>
-          </div>
-          <i aria-hidden="true"></i>
-          <div class="ui-workflow-step">
-            <b>02</b><span><small>DETECT</small>모델 실행</span>
-          </div>
-          <i aria-hidden="true"></i>
-          <div class="ui-workflow-step">
-            <b>03</b><span><small>REVIEW</small>검출 검토</span>
-          </div>
-          <i aria-hidden="true"></i>
-          <div class="ui-workflow-step">
-            <b>04</b><span><small>ARCHIVE</small>저장·보고</span>
-          </div>
-        </nav>
-        """
+_WORKFLOW_STEPS = [
+    ("01", "SELECT", "원본 선택"),
+    ("02", "DETECT", "모델 실행"),
+    ("03", "REVIEW", "검출 검토"),
+    ("04", "ARCHIVE", "저장·보고"),
+]
+
+
+def _workflow_html(selected: bool, has_result: bool, saved: bool) -> str:
+    """세션 상태로 판단한 진행 단계를 반영해 워크플로 바 HTML을 만든다.
+
+    각 단계는 완료(is-done)·진행 중(is-active)·대기(is-todo) 셋 중 하나로 표시된다.
+    """
+    if saved:
+        states = ["done", "done", "done", "done"]
+    elif has_result:
+        states = ["done", "done", "active", "todo"]
+    elif selected:
+        states = ["done", "active", "todo", "todo"]
+    else:
+        states = ["active", "todo", "todo", "todo"]
+
+    steps = [
+        f'<div class="ui-workflow-step is-{state}">'
+        f"<b>{number}</b><span><small>{eyebrow}</small>{label}</span></div>"
+        for (number, eyebrow, label), state in zip(_WORKFLOW_STEPS, states)
+    ]
+    return (
+        '<nav class="ui-workflow" aria-label="EO/SAR 판독 작업 순서">'
+        + '<i aria-hidden="true"></i>'.join(steps)
+        + "</nav>"
     )
 
 
@@ -348,7 +360,12 @@ def render_controls() -> EosarControls:
                         )
                         rotate_k = manual_rot // 90
 
-            run_clicked = st.button("분석 실행", type="primary", use_container_width=True)
+            run_clicked = st.button(
+                "분석 실행",
+                type="primary",
+                use_container_width=True,
+                disabled=filename is None,   # 원본을 골라야 실행할 수 있다
+            )
 
     return EosarControls(
         filename=filename,
@@ -366,21 +383,36 @@ def render_controls() -> EosarControls:
 _DAILY_CHECKLIST_ITEMS = ["신규 영상 판독", "미확인 경보 처리", "분석 보고서 작성"]
 
 
-def render_daily_checklist_bar() -> None:
-    """페이지 맨 위 가로 한 줄 체크리스트 바: 고정 3개 항목 + 진행 현황."""
-    with st.container(key="panel_eosar_checklist"):
-        head_col, body_col = st.columns([0.22, 0.78], vertical_alignment="center")
+def _render_workflow_row() -> None:
+    """워크플로 진행 표시(왼쪽)와 일일 체크리스트 팝오버(오른쪽)를 한 줄에 그린다."""
+    selected = st.session_state.get(_SESSION_S3_SELECTED_KEY) is not None
+    has_result = st.session_state.get(_SESSION_RESULT_KEY) is not None
+    saved = (
+        has_result
+        and st.session_state.get(_SESSION_SAVED_NAME_KEY) is not None
+        and st.session_state.get(_SESSION_SAVED_NAME_KEY)
+        == st.session_state.get(_SESSION_UPLOAD_NAME_KEY)
+    )
 
-        # 체크박스를 먼저 그려 완료 수를 얻고, 왼쪽 제목에 진행 현황을 표시한다.
-        with body_col:
-            item_cols = st.columns(len(_DAILY_CHECKLIST_ITEMS), vertical_alignment="center")
-            checked = []
-            for idx, (col, item) in enumerate(zip(item_cols, _DAILY_CHECKLIST_ITEMS)):
-                with col:
-                    checked.append(st.checkbox(item, key=f"eosar_daily_chk_{idx}"))
+    with st.container(key="panel_eosar_workflow"):
+        bar_col, checklist_col = st.columns([0.78, 0.22], vertical_alignment="center")
 
-        with head_col:
-            st.markdown(f"**일일 체크리스트 ({sum(checked)}/{len(checked)})**")
+        with bar_col:
+            st.html(_workflow_html(selected, has_result, saved))
+
+        with checklist_col:
+            # 위젯 key 값은 클릭 직후 rerun 시작 시점에 이미 갱신돼 있어,
+            # 그리기 전에 읽어도 라벨의 완료 수가 정확하다.
+            done_count = sum(
+                bool(st.session_state.get(f"eosar_daily_chk_{idx}", False))
+                for idx in range(len(_DAILY_CHECKLIST_ITEMS))
+            )
+            with st.popover(
+                f"일일 체크리스트 {done_count}/{len(_DAILY_CHECKLIST_ITEMS)}",
+                use_container_width=True,
+            ):
+                for idx, item in enumerate(_DAILY_CHECKLIST_ITEMS):
+                    st.checkbox(item, key=f"eosar_daily_chk_{idx}")
 
 
 # =====================================================================
@@ -448,12 +480,14 @@ def _save_all(
 
 
 def render_db_save_section(result: InferenceResult, meta: Optional[Dict[str, Any]]) -> None:
-    """image_analysis·detection_result에 저장될 내용을 미리 보여주고, 버튼 하나로 함께 저장한다."""
-    with st.container(key="panel_eosar_database"):
-        render_section_header(
-            "분석 결과 저장",
-            "image_analysis와 detection_result를 함께 갱신합니다.",
-            badge="DATABASE",
+    """image_analysis·detection_result에 저장될 내용을 미리 보여주고, 버튼 하나로 함께 저장한다.
+
+    검토 레일 카드 안의 소섹션으로 그린다 (별도 카드가 아니라 구분선 + 소제목).
+    """
+    with st.container(key="rail_eosar_database"):
+        st.html(
+            '<div class="ui-rail-divider" aria-hidden="true"></div>'
+            '<div class="ui-rail-heading">분석 결과 저장<small>DATABASE</small></div>'
         )
 
         if meta is None:
@@ -543,6 +577,7 @@ def render_db_save_section(result: InferenceResult, meta: Optional[Dict[str, Any
             except Exception as exc:
                 st.error(f"DB 저장 실패: {exc}")
             else:
+                st.session_state[_SESSION_SAVED_NAME_KEY] = result.filename
                 st.success(
                     f"저장 완료: image_id={image_id} (자동 부여), "
                     f"detection_result {len(rows)}개 클래스, "
@@ -590,11 +625,10 @@ def render_report_section(meta: Optional[Dict[str, Any]]) -> None:
     보고서는 DB 데이터로 생성하므로, 현재 영상은 'DB 저장 후'에만 활성화된다
     (편집 중인 미확정 검출 목록과 보고서 내용이 어긋나는 것을 막기 위함).
     """
-    with st.container(key="panel_eosar_report"):
-        render_section_header(
-            "분석 보고서",
-            "현재 영상 또는 과거 분석 기록으로 HTML 보고서를 생성합니다.",
-            badge="REPORT",
+    with st.container(key="rail_eosar_report"):
+        st.html(
+            '<div class="ui-rail-divider" aria-hidden="true"></div>'
+            '<div class="ui-rail-heading">분석 보고서<small>REPORT</small></div>'
         )
 
         # 1) 현재 영상 — 저장돼 있어야(image_id 존재) 생성 가능.
@@ -677,7 +711,7 @@ def render_run_summary(result: InferenceResult, sensor: str) -> None:
 
 def render_detection_table(rows: List[Dict], sensor: str) -> List[int]:
     """탐지된 표적 목록을 보여주고, 선택된 행의 라벨/박스 편집 UI를 제공한다."""
-    # 기본은 접힌 상태 — 저장 버튼까지의 스크롤을 줄이고, 편집할 때만 펼쳐 쓴다.
+    # 기본은 접힌 상태 — 레일을 짧게 유지하고, 편집할 때만 펼쳐 쓴다.
     with st.expander(f"검출 목록 ({len(rows)}개)", expanded=False):
         selected_indices: List[int] = []
 
@@ -962,15 +996,18 @@ def _sync_saved_result_with_upload(controls: EosarControls) -> None:
 # =====================================================================
 
 def render_eosar_page() -> None:
-    """EO/SAR 통합 탐지 페이지 전체를 그린다: 입력 받기 → 센서별 추론 → 결과 표시 → DB 저장."""
+    """EO/SAR 통합 탐지 페이지 전체를 그린다: 입력 받기 → 센서별 추론 → 결과 표시 → DB 저장.
+
+    배치: 왼쪽은 고정 높이 영상 뷰어, 오른쪽은 검토 → DB 저장 → 보고서로 이어지는
+    워크플로 레일. 판독 업무가 위에서 아래로 한 열에서 끝난다.
+    """
     _render_header()
-    _render_workflow_bar()
-    render_daily_checklist_bar()
+    _render_workflow_row()
 
     controls = render_controls()
     _sync_saved_result_with_upload(controls)
 
-    image_col, review_col = st.columns([0.64, 0.36], gap="large")
+    image_col, review_col = st.columns([0.63, 0.37], gap="large")
 
     error_message: Optional[str] = None
     if controls.run_clicked:
@@ -1000,6 +1037,12 @@ def render_eosar_page() -> None:
                         error_message = f"추론 실패: {exc}"
                     else:
                         _save_result(result, sensor, controls.filename, file_bytes)
+                        # 상단 워크플로 바(이미 그려짐)에 완료 상태가 바로 반영되도록
+                        # 결과를 세션에 담고 한 번 다시 그린다.
+                        st.session_state[_SESSION_FLASH_KEY] = (
+                            f"분석 완료 — {len(result.detections)}개 표적을 탐지했습니다."
+                        )
+                        st.rerun()
 
     result: Optional[InferenceResult] = st.session_state.get(_SESSION_RESULT_KEY)
     sensor: Optional[str] = st.session_state.get(_SESSION_SENSOR_KEY)
@@ -1022,6 +1065,10 @@ def render_eosar_page() -> None:
                 if flash_message:
                     st.success(flash_message)
                 selected_indices = render_detection_table(result.detections, sensor)
+                # 저장과 보고서는 같은 카드 안 소섹션으로 이어 붙인다 — 오른쪽이
+                # 카드 하나로 끝나 왼쪽 뷰어 카드와 아래끝이 맞는다.
+                render_db_save_section(result, meta)
+                render_report_section(meta)
             else:
                 render_empty_state(
                     "분석 결과 대기",
@@ -1030,7 +1077,7 @@ def render_eosar_page() -> None:
                 )
 
     # 왼쪽 열: 실행 후에는 탐지 결과 이미지, 파일만 골라둔 상태면 원본 미리보기,
-    # 아무것도 선택 안 했으면 ARGOS 로고.
+    # 아무것도 선택 안 했으면 빈 작업영역 안내.
     with image_col:
         if result is not None and sensor is not None:
             render_image_panel(result, selected_indices)
@@ -1038,18 +1085,3 @@ def render_eosar_page() -> None:
             _render_original_preview(controls.filename, controls.s3_key)
         else:
             render_placeholder_panel()
-
-    # 저장과 보고서는 메인 작업영역 아래 전체 폭을 사용한다. 기능은 기존 함수를 그대로
-    # 호출하되 두 카드가 나란히 보여 오른쪽 열이 과도하게 길어지지 않게 한다.
-    if result is not None and sensor is not None:
-        st.html('<div class="ui-section-separator" aria-hidden="true"></div>')
-        render_section_header(
-            "저장 및 보고",
-            "검토를 마친 결과를 데이터베이스에 반영하고 분석 보고서를 생성합니다.",
-            badge="FOLLOW-UP",
-        )
-        database_col, report_col = st.columns(2, gap="large")
-        with database_col:
-            render_db_save_section(result, meta)
-        with report_col:
-            render_report_section(meta)

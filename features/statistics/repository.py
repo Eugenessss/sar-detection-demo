@@ -30,6 +30,15 @@ def fetch_detection_stats(start: datetime, end: datetime) -> List[Dict[str, Any]
     return [dict(row._mapping) for row in rows]
 
 
+def fetch_latest_captured_time() -> Optional[datetime]:
+    """image_analysis에서 가장 최근 촬영시각을 돌려준다 (행이 없으면 None)."""
+    with get_engine().connect() as conn:
+        row = conn.execute(
+            text(f"SELECT MAX(captured_time) FROM `{_DB}`.`image_analysis`")
+        ).fetchone()
+    return row[0] if row and row[0] is not None else None
+
+
 def fetch_regions() -> List[str]:
     """image_analysis에 있는 지역(region_name) 목록을 중복 없이 돌려준다 (위치 필터용)."""
     with get_engine().connect() as conn:

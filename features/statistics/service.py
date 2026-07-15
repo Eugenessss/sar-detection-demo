@@ -11,7 +11,12 @@ from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from features.statistics.repository import fetch_detection_stats, fetch_equipment_classes, fetch_regions
+from features.statistics.repository import (
+    fetch_detection_stats,
+    fetch_equipment_classes,
+    fetch_latest_captured_time,
+    fetch_regions,
+)
 
 # 화면에 노출할 기간 선택지와 실제 timedelta 매핑 (선택 버튼 라벨 = 이 딕셔너리 키).
 # 24시간·1년을 맨 앞에 두어 버튼 순서 맨 앞에 오게 한다.
@@ -38,6 +43,15 @@ class StatisticsResult:
     start: datetime
     end: datetime
     raw: pd.DataFrame   # 원본 조회 결과 (지역 필터링·표 표시에 함께 쓰인다)
+
+
+def latest_captured_time() -> Optional[datetime]:
+    """DB에 저장된 가장 최근 촬영시각을 돌려준다 (없으면 None).
+
+    분석 현황의 24시간 그래프가 '지금 기준 24시간'에 데이터가 없을 때,
+    마지막 촬영 시점 기준 창으로 대신 보여주는 fallback에 쓴다.
+    """
+    return fetch_latest_captured_time()
 
 
 def resolve_range(start: datetime, interval_label: str) -> Tuple[datetime, datetime]:

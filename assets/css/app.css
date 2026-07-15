@@ -748,18 +748,41 @@ hr {
 }
 
 /* ---------- Page-specific presentation ---------- */
-.st-key-panel_eosar_checklist {
+/* 워크플로 진행 바 + 일일 체크리스트를 담는 한 줄 카드 */
+.st-key-panel_eosar_workflow {
   margin-bottom: 18px;
-  padding: 14px 18px !important;
+  padding: 10px 16px !important;
   border-color: #cbdcf2 !important;
   background: linear-gradient(100deg, #f4f8ff 0%, #ffffff 72%);
 }
 
-.st-key-panel_eosar_checklist [data-testid="stCheckbox"] label {
-  min-height: 39px;
-  padding-inline: 11px;
-  border-color: #dce7f4;
-  background: rgba(255, 255, 255, 0.8);
+.st-key-panel_eosar_workflow .ui-workflow {
+  margin: 0;
+  padding: 2px 0;
+  border: none;
+  background: transparent;
+}
+
+/* 워크플로 단계 상태: 완료(is-done) · 진행 중(is-active) · 대기(is-todo) */
+.ui-workflow-step.is-done b {
+  border-color: var(--ui-primary);
+  color: #ffffff;
+  background: var(--ui-primary);
+}
+
+.ui-workflow-step.is-active b {
+  border-color: var(--ui-primary);
+  color: var(--ui-primary);
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.13);
+}
+
+.ui-workflow-step.is-active span {
+  color: var(--ui-navy);
+}
+
+.ui-workflow-step.is-todo {
+  opacity: 0.55;
 }
 
 .st-key-panel_eosar_controls [data-testid="stVerticalBlockBorderWrapper"] {
@@ -791,26 +814,62 @@ hr {
 }
 
 [class*="st-key-panel_eosar_image_"] {
-  min-height: 560px;
   background: linear-gradient(180deg, #ffffff 0%, #fbfcfe 100%);
 }
 
-[class*="st-key-panel_eosar_image_"] [data-testid="stImage"] img {
-  width: 100%;
-  max-height: 720px;
-  object-fit: contain;
+/* 영상 뷰어: 이미지 크기와 무관하게 높이를 고정하고, 남는 영역은 어두운
+   레터박스로 채워 페이지 높이가 원본 크기에 끌려다니지 않게 한다. */
+[class*="st-key-panel_eosar_image_"] [data-testid="stImage"] {
+  overflow: hidden;
+  border-radius: 14px;
+  background: #0f172a;
 }
 
-.st-key-panel_eosar_database,
-.st-key-panel_eosar_report {
-  margin-top: 14px;
-  min-height: 420px;
+[class*="st-key-panel_eosar_image_"] [data-testid="stImage"] img {
+  display: block;
+  width: 100%;
+  height: 760px;
+  object-fit: contain;
+  /* 테마가 img에 밝은 배경을 깔면 레터박스가 흰 띠로 보이므로 뷰어 색으로 덮는다 */
+  background: #0f172a;
+}
+
+/* 실행 전 빈 작업영역도 뷰어와 같은 높이를 유지한다. */
+.st-key-panel_eosar_image_empty .ui-empty-state {
+  min-height: 760px;
 }
 
 .st-key-panel_eosar_review {
-  min-height: 560px;
   background: linear-gradient(180deg, #ffffff 0%, #f8fbff 100%);
 }
+
+/* 검토 레일 카드 안의 소섹션 제목·구분선 (저장 / 보고서) */
+.ui-rail-divider {
+  height: 1px;
+  margin: 6px 0 2px;
+  background: #e2e9f2;
+}
+
+.ui-rail-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 10px 0 2px;
+  color: var(--ui-text);
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.ui-rail-heading small {
+  color: var(--ui-subtle);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+/* 뷰어 카드는 오른쪽 레일의 expander 개폐와 무관하게 자기 높이를 유지한다
+   (행 단위 stretch를 걸면 오른쪽을 펼칠 때 왼쪽 카드가 따라 늘어난다). */
 
 .st-key-panel_eosar_review .ui-info-strip {
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -901,7 +960,6 @@ hr {
     display: none;
   }
 
-  [class*="st-key-panel_eosar_image_"],
   [class*="st-key-panel_compare_eo_"],
   [class*="st-key-panel_compare_sar_"],
   .st-key-panel_analyst_map,
@@ -911,36 +969,82 @@ hr {
     min-height: auto;
   }
 
-  .st-key-panel_eosar_database,
-  .st-key-panel_eosar_report,
-  .st-key-panel_eosar_review {
-    min-height: auto;
+  [class*="st-key-panel_eosar_image_"] [data-testid="stImage"] img {
+    height: auto;
+    max-height: 62vh;
+  }
+
+  .st-key-panel_eosar_image_empty .ui-empty-state {
+    min-height: 320px;
   }
 }
 
-/* ---------- Login ---------- */
-.st-key-login_page {
-  min-height: calc(100vh - 7rem);
-  display: flex;
-  align-items: center;
+/* ---------- 공통 레이아웃 보정 ---------- */
+/* 메트릭 카드 줄과 아래 본문 사이 간격 — 각 페이지의 spacer div를 대신한다. */
+[data-testid="stHorizontalBlock"]:has(.ui-metric-card) {
+  margin-bottom: 10px;
 }
 
-.st-key-login_page > div {
+/* folium 지도 iframe을 둥근 카드 모서리에 맞춘다. */
+iframe[title="streamlit_folium.st_folium"] {
+  border-radius: 12px;
+}
+
+/* ---------- Login (풀스크린 스플릿) ---------- */
+/* 로그인 컨테이너를 뷰포트 전체에 고정해 앱 기본 여백·헤더와 무관하게
+   좌(브랜드 히어로)·우(로그인 폼) 50:50 분할 화면을 만든다. */
+.stApp:has(.st-key-login_page) header[data-testid="stHeader"] {
+  display: none;
+}
+
+.st-key-login_page {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  overflow-y: auto;
+  background: var(--ui-bg);
+}
+
+.st-key-login_page > div,
+.st-key-login_page [data-testid="stVerticalBlock"] {
   width: 100%;
+}
+
+.st-key-login_page [data-testid="stHorizontalBlock"] {
+  min-height: 100vh;
+  align-items: stretch;
+  gap: 0;
+}
+
+.st-key-login_page [data-testid="stColumn"] > div {
+  height: 100%;
+}
+
+/* 오른쪽 폼 컬럼: 카드 하나를 세로·가로 중앙에 배치 */
+.st-key-login_page [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px clamp(24px, 4vw, 64px);
+}
+
+.st-key-login_page [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child > div {
+  width: min(460px, 100%);
+  height: auto;
 }
 
 .ui-login-hero {
   position: relative;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
-  min-height: 560px;
-  padding: 58px;
-  border: 1px solid #cfe0f5;
-  border-radius: 28px;
+  min-height: 100vh;
+  padding: 52px clamp(40px, 4.5vw, 76px);
+  border-right: 1px solid #cfe0f5;
   background:
     radial-gradient(circle at 78% 22%, rgba(14, 165, 233, 0.18), transparent 30%),
     radial-gradient(circle at 18% 78%, rgba(37, 99, 235, 0.13), transparent 34%),
     linear-gradient(145deg, #ffffff 0%, #edf5ff 52%, #f8fbff 100%);
-  box-shadow: var(--ui-shadow);
 }
 
 .ui-login-orbit {
@@ -974,22 +1078,24 @@ hr {
   letter-spacing: -0.02em;
 }
 
+/* ARGOS 로고 PNG는 흰 배경이라, 히어로 그라데이션 위에서는 흰 타일로 감싼다. */
 .ui-login-brand-mark {
-  display: grid;
-  width: 40px;
-  height: 40px;
-  place-items: center;
+  display: block;
+  width: 44px;
+  height: 44px;
+  padding: 4px;
+  border: 1px solid #d8e5f4;
   border-radius: 12px;
-  color: #ffffff;
-  background: linear-gradient(135deg, var(--ui-primary), var(--ui-sky));
-  font-size: 18px;
-  box-shadow: 0 9px 24px rgba(37, 99, 235, 0.24);
+  background: #ffffff;
+  object-fit: contain;
+  box-shadow: 0 9px 24px rgba(37, 99, 235, 0.16);
 }
 
+/* 브랜드는 상단, 기능 태그는 하단에 고정하고 제목·설명은 그 사이 중앙에 놓는다. */
 .ui-login-hero h1 {
   position: relative;
   max-width: 620px;
-  margin: 118px 0 20px;
+  margin: auto 0 20px;
   color: var(--ui-text);
   font-size: clamp(38px, 4vw, 62px);
   font-weight: 850;
@@ -1011,7 +1117,8 @@ hr {
   display: flex;
   flex-wrap: wrap;
   gap: 9px;
-  margin-top: 42px;
+  margin-top: auto;
+  padding-top: 42px;
 }
 
 .ui-login-features span {
@@ -1026,10 +1133,16 @@ hr {
 }
 
 .st-key-login_card {
-  max-width: 480px;
-  margin: 0 auto;
-  padding: 34px 34px 30px;
+  width: 100%;
+  padding: 36px 34px 30px;
   box-shadow: var(--ui-shadow);
+}
+
+.ui-login-card-logo {
+  display: block;
+  height: 52px;
+  margin-bottom: 12px;
+  object-fit: contain;
 }
 
 .ui-login-card-heading h2 {
@@ -1065,11 +1178,15 @@ hr {
   }
 
   .ui-login-hero {
-    min-height: 500px;
-    padding: 38px;
+    padding: 40px 36px;
+  }
+
+  .ui-login-hero h1 {
+    font-size: clamp(32px, 4.5vw, 44px);
   }
 }
 
+/* 좁은 화면에서는 히어로를 숨기고 로그인 폼만 전체 화면 중앙에 보여준다. */
 @media (max-width: 760px) {
   [data-testid="stAppViewBlockContainer"],
   .block-container {
@@ -1081,14 +1198,14 @@ hr {
     gap: 8px;
   }
 
-  .ui-login-hero {
-    min-height: 390px;
-    padding: 30px;
+  .st-key-login_page [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:first-child {
+    display: none;
   }
 
-  .ui-login-hero h1 {
-    margin-top: 70px;
-    font-size: 38px;
+  .st-key-login_page [data-testid="stHorizontalBlock"] > [data-testid="stColumn"]:last-child {
+    flex: 1 1 100%;
+    width: 100%;
+    min-height: 100vh;
   }
 
   .st-key-login_card {

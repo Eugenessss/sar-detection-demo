@@ -6,6 +6,7 @@ from streamlit_folium import st_folium
 
 from features.ANALYST_DESK import service
 from features.statistics import service as stats_service
+from shared.charts import apply_theme
 from shared.ui import MetricItem, render_metric_grid, render_page_header, render_section_header
 
 # 마커 클릭으로 어느 경보 좌표를 눌렀는지 판별할 때 쓰는 오차 허용치(도 단위, 약 100m).
@@ -104,61 +105,43 @@ def _render_map_column(default_alerts: list | None = None) -> None:
                 st.switch_page(eosar_page)
 
 
-def _render_24h_chart(overlay_data) -> None:
-    """실제(실선)/2시간 평균(점선) 겹쳐그리기 그래프 (statistics 페이지의 24시간 그래프와 같은 형태)."""
+def _render_region_chart(region: str, overlay_data, start, end) -> None:
+    """한 지역의 실제(실선+점)/2시간 평균(점선) 추이 그래프 하나를 그린다.
+
+    촬영 주기가 2시간이므로 X축 틱도 2시간 간격으로 고정하고, 축 범위는 조회 창
+    [start, end] 전체로 잡아 데이터가 한쪽에 몰려도 창이 온전히 보이게 한다.
+    데이터 시점이 많지 않아 선만으로는 놓치기 쉬워 각 시점에 점을 함께 찍는다.
+    """
+    st.markdown(f"**{region}**")
     if overlay_data.empty:
-        st.info("최근 24시간 동안 표시할 통계가 없습니다.")
+        st.info(f"{region}: 이 기간에 표시할 통계가 없습니다.")
         return
+
+    # 촬영 주기(2시간)에 맞춘 X축 틱. Streamlit 내장 Vega가 tickCount의
+    # TimeIntervalStep 표기를 지원하지 못해(빈 차트로 렌더링됨) 틱 값을 직접 나열한다.
+    tick_values = [
+        (start + datetime.timedelta(hours=2 * i)).isoformat()
+        for i in range(int((end - start).total_seconds() // 7200) + 1)
+    ]
+
     chart = (
         alt.Chart(overlay_data)
-        .mark_line()
+        .mark_line(point=True)
         .encode(
-            x=alt.X("captured_time:T", title="촬영시각"),
+            x=alt.X(
+                "captured_time:T",
+                title=None,
+                scale=alt.Scale(domain=[start.isoformat(), end.isoformat()]),
+                axis=alt.Axis(format="%d일 %H시", labelAngle=-35, values=tick_values),
+            ),
             y=alt.Y("detected_count:Q", title="탐지 수"),
             color=alt.Color("class_name:N", title="장비"),
             strokeDash=alt.StrokeDash("series:N", title="구분 (실제/평균)"),
             tooltip=["class_name", "series", "captured_time:T", "detected_count:Q"],
         )
-        .properties(height=455)
-        .configure_view(strokeOpacity=0)
-        .configure_axis(
-            gridColor="#E7EDF4",
-            domainColor="#CBD5E1",
-            labelColor="#64748B",
-            titleColor="#334155",
-            tickColor="#CBD5E1",
-        )
-        .configure_legend(
-            labelColor="#475569",
-            titleColor="#334155",
-            orient="bottom",
-        )
-        .interactive()
+        .properties(height=200)
     )
-    st.altair_chart(chart, use_container_width=True)
-
-
-_STATS_REGION_KEY = "analyst_desk_stats_region"
-
-
-def _render_region_control() -> str:
-    """그래프 위: 지역 선택 팝오버 하나만 두고, 그 안에 지역 이름을 버튼으로 나열한다.
-    선택된 region_name을 돌려준다 ("전체"면 필터 없음)."""
-    try:
-        regions = stats_service.list_regions()
-    except Exception as exc:
-        st.error(f"지역 목록 조회 실패: {exc}")
-        regions = []
-
-    if _STATS_REGION_KEY not in st.session_state:
-        st.session_state[_STATS_REGION_KEY] = "전체"
-
-    with st.popover(f"장소 선택 ({st.session_state[_STATS_REGION_KEY]})", use_container_width=True):
-        for region_name in ["전체"] + regions:
-            if st.button(region_name, use_container_width=True, key=f"analyst_desk_region_{region_name}"):
-                st.session_state[_STATS_REGION_KEY] = region_name
-
-    return st.session_state[_STATS_REGION_KEY]
+    st.altair_chart(apply_theme(chart), use_container_width=True)
 
 
 def _render_statistics_detail_button() -> None:
@@ -172,36 +155,52 @@ def _render_statistics_detail_button() -> None:
 
 
 def _render_statistics_column() -> None:
-    """오른쪽 칸: 지역 선택(팝오버) 하나만 두고, 조회 시점(현재 시각) 기준 최근 24시간
-    탐지 통계 그래프를 보여준 뒤, 그 아래에 상세 통계 페이지로 이동하는 버튼을 둔다."""
+    """오른쪽 칸: 조회 시점(현재 시각) 기준 최근 24시간 탐지 추이를 지역(개풍군/원산시)별로
+    위아래 두 그래프로 보여주고, 그 아래에 상세 통계 페이지로 이동하는 버튼을 둔다."""
     render_section_header(
         "최근 24시간 탐지 추이",
-        "실제 탐지 건수와 2시간 이동 평균을 비교합니다.",
+        "지역별 실제 탐지 건수와 2시간 구간 평균을 비교합니다.",
         badge="24 HOURS",
     )
 
-    region = _render_region_control()
-
     now = datetime.datetime.now()
     start, end = stats_service.resolve_range(now - datetime.timedelta(hours=24), "24시간")
-    st.caption(f"{start:%Y-%m-%d %H:%M} ~ {end:%Y-%m-%d %H:%M}")
 
     result = None
+    anchored = False   # 최근 24시간 대신 마지막 촬영 시점 기준 창을 쓰고 있는지
     query_failed = False
     with st.spinner("통계 조회 중..."):
         try:
             result = stats_service.build_statistics(start, end)
+            if result is None:
+                # 최근 24시간 내 촬영분이 없으면(데모처럼 과거 촬영 데이터만 있는 경우)
+                # 마지막 촬영시각을 끝점으로 한 24시간 창을 대신 보여줘 첫 화면이 비지 않게 한다.
+                latest = stats_service.latest_captured_time()
+                if latest is not None:
+                    start, end = stats_service.resolve_range(
+                        latest - datetime.timedelta(hours=24), "24시간"
+                    )
+                    result = stats_service.build_statistics(start, end)
+                    anchored = result is not None
         except Exception as exc:
             st.error(f"통계 조회 실패: {exc}")
             query_failed = True
 
+    range_caption = f"{start:%Y-%m-%d %H:%M} ~ {end:%Y-%m-%d %H:%M}"
+    if anchored:
+        range_caption += " · 최근 24시간 내 탐지가 없어 마지막 촬영 시점 기준으로 표시"
+    st.caption(range_caption)
+
     if not query_failed:
         if result is None:
-            st.warning("최근 24시간 동안 조회된 탐지 결과가 없습니다.")
+            st.warning("조회된 탐지 결과가 없습니다.")
         else:
-            selected_region = None if region == "전체" else region
-            overlay_data = stats_service.build_two_hour_overlay(result.raw, start, end, selected_region)
-            _render_24h_chart(overlay_data)
+            # 지역 필터 대신 데이터에 있는 지역(개풍군/원산시)마다 그래프를 하나씩
+            # 세로로 쌓는다 — 두 작전지역을 클릭 없이 한눈에 비교할 수 있다.
+            regions = sorted(result.raw["region_name"].dropna().unique())
+            for region in regions:
+                overlay_data = stats_service.build_two_hour_overlay(result.raw, start, end, region)
+                _render_region_chart(region, overlay_data, start, end)
 
     _render_statistics_detail_button()
 
@@ -231,8 +230,6 @@ def render_map_view() -> None:
             MetricItem("운용 센서", f"{len(sensors)}종", "EO · SAR 연계", "sky"),
         ]
     )
-
-    st.html('<div style="height:10px" aria-hidden="true"></div>')
 
     map_col, stats_col = st.columns([1.08, 0.92], gap="large")
 

@@ -124,7 +124,6 @@ def render_map_view() -> None:
         ]
     )
 
-    st.html('<div style="height:10px" aria-hidden="true"></div>')
     map_col, alerts_col = st.columns(_MAP_COLUMN_RATIO, gap="large")
 
     with map_col:

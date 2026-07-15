@@ -4,23 +4,35 @@ app_user 테이블 기반 로그인 화면. app.py는 세션에 로그인 사용
 보여주고 멈춘다. 로그인에 성공하면 세션에 사용자 정보(shared.auth.AuthUser)를 저장해,
 app.py가 그 역할(분석관/지휘관)에 맞는 메뉴만 구성하도록 한다.
 """
+import base64
+from functools import lru_cache
+from pathlib import Path
+
 import streamlit as st
 
 from shared.auth import authenticate
+
+_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "images" / "argos_logo_small.png"
+
+
+@lru_cache(maxsize=1)
+def _logo_data_uri() -> str:
+    """ARGOS 로고 PNG를 <img>에 바로 넣을 수 있는 data URI로 만든다 (프로세스당 1회)."""
+    return "data:image/png;base64," + base64.b64encode(_LOGO_PATH.read_bytes()).decode("ascii")
 
 
 def render_login_page() -> None:
     """아이디/비밀번호 입력 폼을 그리고, 성공하면 세션에 로그인 사용자를 저장한다."""
     with st.container(key="login_page"):
-        hero_col, form_col = st.columns([1.18, 0.82], gap="large", vertical_alignment="center")
+        hero_col, form_col = st.columns([1, 1], gap="small")
 
         with hero_col:
             st.html(
-                """
+                f"""
                 <section class="ui-login-hero">
                   <div class="ui-login-orbit" aria-hidden="true"></div>
                   <div class="ui-login-brand">
-                    <span class="ui-login-brand-mark">◎</span>
+                    <img class="ui-login-brand-mark" src="{_logo_data_uri()}" alt="ARGOS">
                     <span>청출어람 위성정보 시스템</span>
                   </div>
                   <h1>더 빠르고 정확한<br><span>위성정보 판독</span></h1>
@@ -41,8 +53,9 @@ def render_login_page() -> None:
         with form_col:
             with st.container(key="login_card"):
                 st.html(
-                    """
+                    f"""
                     <header class="ui-login-card-heading">
+                      <img class="ui-login-card-logo" src="{_logo_data_uri()}" alt="ARGOS">
                       <h2>시스템 로그인</h2>
                       <p>승인된 분석관 또는 지휘관 계정으로 접속해 주세요.</p>
                     </header>
@@ -68,6 +81,11 @@ def render_login_page() -> None:
                         use_container_width=True,
                     )
 
+                # 로그인 페이지 컨테이너가 화면 전체를 덮는 고정 레이어이므로,
+                # 실패 메시지는 반드시 카드 안(폼 바로 아래)에서 그려야 보인다.
+                if submitted:
+                    _process_login(login_id, password)
+
                 st.html(
                     """
                     <div class="ui-security-note">
@@ -77,9 +95,9 @@ def render_login_page() -> None:
                     """
                 )
 
-    if not submitted:
-        return
 
+def _process_login(login_id: str, password: str) -> None:
+    """자격 증명을 검증해 실패 사유를 표시하고, 성공하면 세션을 갱신한다."""
     try:
         user = authenticate(login_id, password)
     except Exception as exc:

@@ -93,10 +93,12 @@ def render_alerts_page(
 
         level_filter: Optional[Union[str, Sequence[str]]]
         if show_level_filter:
-            level = st.radio(
-                "경보 등급", level_options or ["전체", "URGENT", "IMPORTANT", "NOTICE"], horizontal=True,
+            # segmented_control은 선택을 해제해 None을 돌려줄 수 있으므로 "전체"와 같게 취급한다.
+            options = level_options or ["전체", "URGENT", "IMPORTANT", "NOTICE"]
+            level = st.segmented_control(
+                "경보 등급", options, default=options[0], key="alerts_level_filter",
             )
-            level_filter = None if level == "전체" else level
+            level_filter = None if level in (None, "전체") else level
         else:
             if level_legend:
                 st.caption(level_legend)
@@ -106,8 +108,10 @@ def render_alerts_page(
 
         status_filter: Optional[str] = None
         if show_status_filter:
-            status = st.radio("처리 상태", ["NEW", "CHECKED", "전체"], horizontal=True)
-            status_filter = None if status == "전체" else status
+            status = st.segmented_control(
+                "처리 상태", ["NEW", "CHECKED", "전체"], default="NEW", key="alerts_status_filter",
+            )
+            status_filter = None if status in (None, "전체") else status
 
     try:
         alerts = service.fetch_alerts(level_filter, status_filter)

@@ -8,7 +8,9 @@ from typing import Sequence
 import streamlit as st
 from streamlit_navigation_bar import st_navbar
 
-_LOGO_PATH = Path(__file__).resolve().parents[2] / "assets" / "images" / "cheongchuleoram-mark.svg"
+# ARGOS 로고 원본은 PNG(argos_logo_small.png)인데, navbar 라이브러리가 SVG 텍스트만
+# 받으므로(image/svg+xml 하드코딩) PNG를 base64로 내장한 래퍼 SVG를 사용한다.
+_LOGO_PATH = Path(__file__).resolve().parents[2] / "assets" / "images" / "argos-logo.svg"
 _LOGO_PAGE_TITLE = "청출어람 홈"
 
 _NAVBAR_STYLES = {

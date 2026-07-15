@@ -13,31 +13,10 @@ import altair as alt
 import streamlit as st
 
 from features.statistics import report, service
+from shared.charts import apply_theme
 from shared.ui import render_page_header, render_section_header
 
 _INTERVAL_LABELS = list(service.INTERVALS.keys())
-
-# 세션 상태 키·CSS 클래스에 쓸 ASCII 슬러그 (한글 라벨을 그대로 key로 쓰면 CSS 선택자가 깨진다).
-_INTERVAL_KEY_SLUGS = {
-    "12시간": "12h",
-    "24시간": "24h",
-    "1주": "1w",
-    "1개월": "1m",
-    "1년": "1y",
-}
-
-
-def _inject_highlighted_interval_css() -> None:
-    """현재 선택된 기간 버튼을 프로젝트 주색상으로 강조한다."""
-    selected = st.session_state.get("stats_interval", service.DEFAULT_INTERVAL)
-    slug = _INTERVAL_KEY_SLUGS[selected]
-    rules = (
-        f'.st-key-interval_{slug} button {{'
-        'background-color:#2563EB; border-color:#2563EB; color:#FFFFFF;}'
-        f'.st-key-interval_{slug} button:hover {{'
-        'background-color:#1D4ED8; border-color:#1D4ED8; color:#FFFFFF;}'
-    )
-    st.markdown(f"<style>{rules}</style>", unsafe_allow_html=True)
 
 
 def render_location_control() -> str:
@@ -64,12 +43,15 @@ def render_equipment_controls() -> Optional[List[str]]:
     """왼쪽 칸: 위협등급(threat_level 1/2/3) 체크박스로 먼저 거른 뒤,
     그 등급에 속한 장비만 장비 선택 팝오버에 체크박스로 올려 고른 장비(class_name) 목록을 돌려준다 (없으면 None)."""
     st.markdown("**위협등급 필터**")
-    threat_columns = st.columns(len(service.THREAT_LEVELS))
-    selected_threat_levels = []
-    for level, column in zip(service.THREAT_LEVELS, threat_columns):
-        with column:
-            if st.checkbox(f"위협도 {level}", value=True, key=f"threat_level_{level}"):
-                selected_threat_levels.append(level)
+    selected_threat_levels = st.pills(
+        "위협등급",
+        service.THREAT_LEVELS,
+        selection_mode="multi",
+        default=service.THREAT_LEVELS,
+        format_func=lambda level: f"위협도 {level}",
+        key="stats_threat_levels",
+        label_visibility="collapsed",
+    )
 
     if not selected_threat_levels:
         st.caption("위협등급을 하나 이상 선택하면 장비 목록이 표시됩니다.")
@@ -96,12 +78,18 @@ def render_period_controls() -> tuple:
     """왼쪽 칸: 시작 일시(연/월/일/시 선택)·기간 선택 버튼·조회범위 안내를 세로로 몰아 그리고, (시작시각, 종료시각)을 돌려준다."""
     today = datetime.date.today()
     if "stats_start_year" not in st.session_state:
-        st.session_state.stats_start_year = today.year
-    if "stats_start_month" not in st.session_state:
-        st.session_state.stats_start_month = today.month
-    if "stats_start_day" not in st.session_state:
-        st.session_state.stats_start_day = today.day
-    if "stats_start_hour" not in st.session_state:
+        # 첫 진입 기본 시작일은 데이터가 있는 마지막 촬영일로 잡는다 — 오늘 날짜로
+        # 시작하면 과거 촬영분(데모 데이터)뿐일 때 빈 경고만 보이기 때문.
+        try:
+            anchor = service.latest_captured_time()
+        except Exception:
+            anchor = None
+        base = anchor.date() if anchor is not None else today
+        if base.year < today.year - 5:   # 연 선택지 범위(최근 5년) 밖이면 오늘로 되돌린다
+            base = today
+        st.session_state.stats_start_year = base.year
+        st.session_state.stats_start_month = base.month
+        st.session_state.stats_start_day = base.day
         st.session_state.stats_start_hour = 0
 
     st.markdown("**시작 일시**")
@@ -134,15 +122,17 @@ def render_period_controls() -> tuple:
 
     start = datetime.datetime(year, month, day, hour)
 
-    if "stats_interval" not in st.session_state:
-        st.session_state.stats_interval = service.DEFAULT_INTERVAL
-
     st.markdown("**기간 선택**")
-    _inject_highlighted_interval_css()
-    for label in _INTERVAL_LABELS:
-        if st.button(label, use_container_width=True, key=f"interval_{_INTERVAL_KEY_SLUGS[label]}"):
-            st.session_state.stats_interval = label
-    interval_label = st.session_state.stats_interval
+    # segmented_control은 선택 상태를 위젯이 직접 강조하므로 별도 CSS 주입이 필요 없다.
+    # 선택을 해제하면 None이 돌아오므로 기본 기간으로 되돌린다.
+    selected_interval = st.segmented_control(
+        "기간 선택",
+        _INTERVAL_LABELS,
+        default=service.DEFAULT_INTERVAL,
+        key="stats_interval",
+        label_visibility="collapsed",
+    )
+    interval_label = selected_interval or service.DEFAULT_INTERVAL
 
     start, end = service.resolve_range(start, interval_label)
     st.info(f"**조회 범위** ({interval_label})\n\n{start} ~ {end}")
@@ -152,33 +142,68 @@ def render_period_controls() -> tuple:
 
 
 
-def _render_actual_vs_average_chart(overlay_data, empty_message: str) -> None:
-    """실제(실선)/평균(점선) 겹쳐그리기 장문형 데이터를 장비별 색상으로 그린다 (1년·24시간 오버레이 공용)."""
+def _render_actual_vs_average_chart(
+    overlay_data,
+    empty_message: str,
+    *,
+    domain: Optional[List[str]] = None,
+    tick_values: Optional[List[str]] = None,
+) -> None:
+    """실제(실선+점)/평균(점선) 겹쳐그리기 장문형 데이터를 장비별 색상으로 그린다 (1년·24시간 오버레이 공용).
+
+    domain·tick_values를 주면 X축 범위와 틱 시각을 고정한다 (24시간 조회처럼 촬영
+    주기가 일정한 경우). Streamlit 내장 Vega가 tickCount의 TimeIntervalStep을
+    지원하지 못해 틱 값을 직접 나열하며, 축을 고정한 차트에는 .interactive()를
+    걸지 않는다 (명시적 도메인과 스케일 바인딩이 얽히는 것을 피한다).
+    """
     if overlay_data.empty:
         st.info(empty_message)
         return
+
+    x_kwargs = {}
+    if domain is not None:
+        x_kwargs["scale"] = alt.Scale(domain=domain)
+    if tick_values is not None:
+        x_kwargs["axis"] = alt.Axis(format="%d일 %H시", labelAngle=-35, values=tick_values)
+
     chart = (
         alt.Chart(overlay_data)
-        .mark_line()
+        .mark_line(point=True)
         .encode(
-            x=alt.X("captured_time:T", title="촬영시각"),
+            x=alt.X("captured_time:T", title="촬영시각", **x_kwargs),
             y=alt.Y("detected_count:Q", title="탐지 수"),
             color=alt.Color("class_name:N", title="장비"),
             strokeDash=alt.StrokeDash("series:N", title="구분 (실제/평균)"),
             tooltip=["class_name", "series", "captured_time:T", "detected_count:Q"],
         )
         .properties(height=380)
-        .configure_view(strokeOpacity=0)
-        .configure_axis(
-            gridColor="#E7EDF4",
-            domainColor="#CBD5E1",
-            labelColor="#64748B",
-            titleColor="#334155",
+    )
+    if domain is None and tick_values is None:
+        chart = chart.interactive()
+    st.altair_chart(apply_theme(chart), use_container_width=True)
+
+
+def _render_time_series_chart(time_series) -> None:
+    """피벗(촬영시각 × 장비) 시계열을 오버레이 차트와 같은 팔레트·축 스타일로 그린다."""
+    if time_series.empty:
+        st.info("해당 기간에 표시할 통계가 없습니다.")
+        return
+    data = time_series.reset_index().melt(
+        "captured_time", var_name="class_name", value_name="detected_count"
+    )
+    chart = (
+        alt.Chart(data)
+        .mark_line()
+        .encode(
+            x=alt.X("captured_time:T", title="촬영시각"),
+            y=alt.Y("detected_count:Q", title="탐지 수"),
+            color=alt.Color("class_name:N", title="장비"),
+            tooltip=["class_name", "captured_time:T", "detected_count:Q"],
         )
-        .configure_legend(labelColor="#475569", titleColor="#334155", orient="bottom")
+        .properties(height=380)
         .interactive()
     )
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(apply_theme(chart), use_container_width=True)
 
 
 def render_graph_column(
@@ -215,9 +240,17 @@ def render_graph_column(
         _render_actual_vs_average_chart(overlay_data, "해당 연도에 표시할 통계가 없습니다.")
     elif interval_label == "24시간":
         overlay_data = service.build_two_hour_overlay(result.raw, start, end, selected_region, equipment)
-        _render_actual_vs_average_chart(overlay_data, "해당 기간에 표시할 통계가 없습니다.")
+        two_hour_ticks = [
+            (start + datetime.timedelta(hours=2 * i)).isoformat() for i in range(13)
+        ]
+        _render_actual_vs_average_chart(
+            overlay_data,
+            "해당 기간에 표시할 통계가 없습니다.",
+            domain=[start.isoformat(), end.isoformat()],
+            tick_values=two_hour_ticks,
+        )
     else:
-        st.line_chart(time_series, use_container_width=True)
+        _render_time_series_chart(time_series)
 
     with st.expander("원본 조회 결과"):
         st.dataframe(result.raw, use_container_width=True, hide_index=True)
