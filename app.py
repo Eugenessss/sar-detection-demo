@@ -1,9 +1,4 @@
-"""
-[진입점]
-Streamlit 통합 앱의 시작점. 'streamlit run app.py'로 실행하면 이 파일이 뜬다.
-상단 메뉴에 페이지들(Home / SAR / EO / DB / Blank)을 등록하고, 선택된 페이지를 실행한다.
-각 페이지의 실제 내용은 features/<도메인>/view.py에 있고, 여기서는 페이지 연결만 담당한다.
-"""
+"""Streamlit 통합 앱의 진입점과 역할 기반 페이지 라우팅."""
 import sys
 from pathlib import Path
 
@@ -14,107 +9,103 @@ import streamlit as st
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from features.alerts.view import render_alerts_page
-from features.db.view import render_db_page
-from features.eo.view import render_eo_page
 from features.eosar.view import render_eosar_page
 from features.HQ_DESK.view import render_hq_desk_page
-from features.reports.view import render_reports_page
-from features.sar.view import render_sar_page
 from features.statistics.view import render_statistics_page
-from home import render_home_page
-from placeholders import render_blank_1_page
 from features.EOSAR_compare.view import render_eosar_compare_page
 from features.ANALYST_DESK.view import render_hq_desk_page as render_analyst_desk_page
 from login import render_login_page
-from shared.ui_chrome import apply_global_polish, apply_icon_rail_nav
+from shared.ui.navigation import render_top_navigation
+from shared.ui.styles import load_global_styles
 
 
-st.set_page_config(page_title="청출어람", layout="wide", initial_sidebar_state="expanded")
-apply_global_polish()
+st.set_page_config(
+    page_title="청출어람 | 위성정보 판독 지원",
+    page_icon="🛰️",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
 
 auth_user = st.session_state.get("auth_user")
 
-# st.navigation()은 매 실행마다 반드시 호출한다 (로그인 전이라고 건너뛰지 않는다).
-# 예전엔 로그인 전엔 st.navigation() 호출 자체를 건너뛰고 st.stop()으로 멈췄는데,
-# 그러면 로그아웃 직후 다시 그려질 때 브라우저에 남아있던 이전 상단 탭바가
-# 지워지지 않는 문제가 있었다. 매번 호출하되 pages만 로그인 여부로 바꾸면,
-# "탭이 없다"는 상태 자체도 매번 명시적으로 다시 알려주게 되어 깔끔히 사라진다.
+# 로그인 전에는 기본 내비게이션을 숨긴 채 로그인 페이지만 등록한다. 로그인 후에는
+# 네이티브 상단 내비게이션(st.navigation(position="top"))이 역할별 페이지와 숨김
+# 상세 페이지를 함께 라우터에 등록한다. 로그아웃하면 다시 로그인 페이지만 등록되므로
+# 이전 역할의 메뉴와 URL 접근도 제거된다.
 if auth_user is None:
-    pages = [st.Page(render_login_page, title="Login", url_path="login")]
-    nav_position = "hidden"
+    pages = [st.Page(render_login_page, title="로그인", url_path="login")]
+    st.session_state.pop("_pages_by_url", None)
+    current_page = st.navigation(pages, position="hidden")
 else:
     # 역할별로 접근 가능한 메뉴를 나눈다: 분석관(ANALYST)은 분석 화면들,
     # 지휘관(COMMANDER)은 Commander Desk만 본다. 각 목록의 첫 항목이 기본 화면.
-    # icon은 상단 탭바 대신 왼쪽 사이드바 아이콘 레일 내비게이션(position="sidebar")에
-    # 쓰인다 — Streamlit 공식 st.Page(icon=...) 기능이라 커스텀 CSS 없이 동작한다.
     if auth_user.role == "COMMANDER":
         visible_pages = [
             st.Page(
-                render_hq_desk_page, title="Commander Desk",
-                icon=":material/shield:", url_path="hq-desk",
+                render_hq_desk_page,
+                title="지휘관 현황",
+                icon=":material/shield_person:",
+                url_path="hq-desk",
             ),
         ]
     else:
         visible_pages = [
             st.Page(
-                render_analyst_desk_page, title="Analyst Desk",
-                icon=":material/radar:", url_path="analyst-desk",
+                render_analyst_desk_page,
+                title="분석 현황",
+                icon=":material/space_dashboard:",
+                url_path="analyst-desk",
             ),
             st.Page(
-                render_eosar_page, title="EO/SAR_detect",
-                icon=":material/search:", url_path="eosar",
+                render_eosar_page,
+                title="EO/SAR 판독",
+                icon=":material/satellite_alt:",
+                url_path="eosar",
             ),
             st.Page(
-                render_eosar_compare_page, title="EO/SAR_compare",
-                icon=":material/compare:", url_path="EOSAR_compare",
+                render_eosar_compare_page,
+                title="영상 비교",
+                icon=":material/compare:",
+                url_path="eosar-compare",
             ),
         ]
 
-    # 다른 화면에서 st.switch_page()로 접근할 수 있지만 메뉴에는 안 보이는 하위 페이지.
+    # 다른 화면에서 st.switch_page()로 접근할 수 있지만 상단 메뉴에는 안 보이는 하위 페이지.
     hidden_pages = [
         st.Page(
             render_alerts_page,
-            title="Alerts",
-            icon=":material/notifications:",
+            title="경보 상세",
             url_path="alerts",
             visibility="hidden",
         ),
         st.Page(
             render_statistics_page,
-            title="Statistics",
-            icon=":material/bar_chart:",
+            title="상세 통계",
             url_path="statistics",
             visibility="hidden",
         ),
     ]
 
-    pages = [*visible_pages, *hidden_pages]
-    nav_position = "sidebar"
+    def _logout() -> None:
+        st.session_state.pop("auth_user", None)
+        st.session_state.pop("_pages_by_url", None)
+        st.rerun()
+
+    role_label = "지휘관" if auth_user.role == "COMMANDER" else "영상판독관"
+    logout_page = st.Page(
+        _logout,
+        title=f"로그아웃 ({auth_user.user_name}·{role_label})",
+        icon=":material/logout:",
+        url_path="logout",
+    )
 
     # 다른 페이지(예: HQ Desk의 경보 목록)에서 st.switch_page()로 이 페이지들로 이동할 수
     # 있도록 url_path -> StreamlitPage 매핑을 세션에 저장해둔다. callable 기반 페이지는
     # 파일 경로가 아니라 st.navigation에 등록된 이 StreamlitPage 객체 자체가 있어야
     # st.switch_page로 이동할 수 있다.
+    pages = [*visible_pages, logout_page, *hidden_pages]
     st.session_state["_pages_by_url"] = {p.url_path: p for p in pages}
+    current_page = render_top_navigation(pages)
 
-# st.navigation()이 position="sidebar"일 때 이 호출 시점에 사이드바 맨 위에 아이콘
-# 내비게이션을 그린다. 로그인한 사람 정보·로그아웃 버튼은 그 아래에 이어서 그려야
-# "내비게이션 위 / 사용자 정보 아래" 순서가 되므로, 이 호출 다음에 둔다.
-current_page = st.navigation(pages, position=nav_position)
-
-if auth_user is not None:
-    apply_icon_rail_nav()
-    # 사이드바가 68px로 좁아서 "이름 (역할)" 캡션은 줄바꿈되며 어색해지므로 빼고,
-    # 아이콘만 있는 로그아웃 버튼 하나로 대신한다 — 누구로 로그인했는지는 버튼에
-    # 마우스를 올리면(help) 툴팁으로 보인다.
-    with st.sidebar:
-        st.divider()
-        if st.button(
-            "", icon=":material/logout:",
-            help=f"{auth_user.user_name} ({auth_user.role}) — 로그아웃",
-            use_container_width=True,
-        ):
-            del st.session_state["auth_user"]
-            st.rerun()
-
+load_global_styles()
 current_page.run()

@@ -3,12 +3,14 @@
 판독관이 alert 테이블의 경보를 확인하고, 필요 시 보고서 초안을 직접 생성하는 페이지.
 경보 분류는 change_analysis.py가 만들고, 이 화면은 조회/확인/보고 필요 판단만 담당한다.
 """
+from contextlib import nullcontext
 from typing import Dict, List, Optional, Sequence, Union
 
 import pandas as pd
 import streamlit as st
 
 from features.alerts import service
+from shared.ui import MetricItem, render_metric_grid, render_page_header, render_section_header
 
 # alert_level(enum 원본값) -> 표에 보여줄 색상 마커(텍스트 없이 마커만).
 _LEVEL_DISPLAY = {
@@ -63,30 +65,49 @@ def render_alerts_page(
             _render_focused_alert_view(focused_alert_id)
             return
 
-    st.title("경보 확인")
     if show_caption:
-        st.caption("판독관이 미확인 경보를 확인하고, 보고 필요 여부를 수동으로 결정합니다.")
-
-    if level_row_spacer_px:
-        st.markdown(f"<div style='height:{level_row_spacer_px}px;'></div>", unsafe_allow_html=True)
-
-    level_filter: Optional[Union[str, Sequence[str]]]
-    if show_level_filter:
-        level = st.radio(
-            "경보 등급", level_options or ["전체", "URGENT", "IMPORTANT", "NOTICE"], horizontal=True,
+        render_page_header(
+            "경보 확인",
+            "변화 탐지 경보를 등급과 처리 상태별로 확인하고 후속 보고 여부를 판단합니다.",
+            eyebrow="ALERT TRIAGE",
+            status="경보 체계 연결",
         )
-        level_filter = None if level == "전체" else level
     else:
-        if level_legend:
-            st.caption(level_legend)
-        if legend_help_text:
-            st.caption(legend_help_text)
-        level_filter = fixed_levels
+        render_section_header(
+            "우선 경보",
+            "긴급·중요 경보를 우선순위 순으로 확인합니다.",
+            badge="PRIORITY",
+        )
 
-    status_filter: Optional[str] = None
-    if show_status_filter:
-        status = st.radio("처리 상태", ["NEW", "CHECKED", "전체"], horizontal=True)
-        status_filter = None if status == "전체" else status
+    filter_panel = st.container(key="panel_alert_filters") if show_caption else nullcontext()
+    with filter_panel:
+        if show_caption:
+            render_section_header(
+                "경보 조회 조건",
+                "등급과 처리 상태를 조합해 검토 대상을 빠르게 좁힙니다.",
+                badge="FILTER",
+            )
+
+        if level_row_spacer_px:
+            st.markdown(f"<div style='height:{level_row_spacer_px}px;'></div>", unsafe_allow_html=True)
+
+        level_filter: Optional[Union[str, Sequence[str]]]
+        if show_level_filter:
+            level = st.radio(
+                "경보 등급", level_options or ["전체", "URGENT", "IMPORTANT", "NOTICE"], horizontal=True,
+            )
+            level_filter = None if level == "전체" else level
+        else:
+            if level_legend:
+                st.caption(level_legend)
+            if legend_help_text:
+                st.caption(legend_help_text)
+            level_filter = fixed_levels
+
+        status_filter: Optional[str] = None
+        if show_status_filter:
+            status = st.radio("처리 상태", ["NEW", "CHECKED", "전체"], horizontal=True)
+            status_filter = None if status == "전체" else status
 
     try:
         alerts = service.fetch_alerts(level_filter, status_filter)
@@ -98,25 +119,47 @@ def render_alerts_page(
         st.info("조회 조건에 맞는 경보가 없습니다.")
         return
 
-    if show_mark_all_button:
-        if st.button("미확인 경보 모두 확인 처리", use_container_width=True):
-            try:
-                updated = service.mark_all_checked()
-            except Exception as exc:
-                st.error(f"전체 확인 처리 실패: {exc}")
-            else:
-                st.success(f"{updated}건 확인 처리했습니다.")
-                st.rerun()
+    if show_caption:
+        urgent_count = sum(item["alert_level"] == "URGENT" for item in alerts)
+        important_count = sum(item["alert_level"] == "IMPORTANT" for item in alerts)
+        new_count = sum(item["alert_status"] == "NEW" for item in alerts)
+        render_metric_grid(
+            [
+                MetricItem("조회 경보", f"{len(alerts)}건", "현재 조건 기준", "primary"),
+                MetricItem("미확인", f"{new_count}건", "확인 처리 필요", "warning"),
+                MetricItem("긴급", f"{urgent_count}건", "즉시 검토", "danger"),
+                MetricItem("중요", f"{important_count}건", "우선 검토", "sky"),
+            ]
+        )
 
-    if table_top_spacer_px:
-        st.markdown(f"<div style='height:{table_top_spacer_px}px;'></div>", unsafe_allow_html=True)
+    table_panel = st.container(key="panel_alert_table") if show_caption else nullcontext()
+    with table_panel:
+        if show_caption:
+            render_section_header(
+                "경보 목록",
+                "행을 선택하면 상세 메시지와 후속 처리 기능이 열립니다.",
+                badge=f"{len(alerts)} ALERTS",
+            )
 
-    selected = _render_alert_table(
-        alerts,
-        hidden_columns=hidden_columns,
-        enable_selection=enable_row_selection,
-        height=table_height,
-    )
+        if show_mark_all_button:
+            if st.button("미확인 경보 모두 확인 처리", use_container_width=True):
+                try:
+                    updated = service.mark_all_checked()
+                except Exception as exc:
+                    st.error(f"전체 확인 처리 실패: {exc}")
+                else:
+                    st.success(f"{updated}건 확인 처리했습니다.")
+                    st.rerun()
+
+        if table_top_spacer_px:
+            st.markdown(f"<div style='height:{table_top_spacer_px}px;'></div>", unsafe_allow_html=True)
+
+        selected = _render_alert_table(
+            alerts,
+            hidden_columns=hidden_columns,
+            enable_selection=enable_row_selection,
+            height=table_height,
+        )
     if selected is not None:
         if navigate_on_select_url_path:
             target_page = st.session_state.get("_pages_by_url", {}).get(navigate_on_select_url_path)
@@ -138,6 +181,12 @@ def _render_focused_alert_view(focused_alert_id: str) -> None:
     쿼리 파라미터에 back_to(원래 화면의 url_path)가 있으면 그리로 돌아가는
     버튼도 맨 위에 둔다.
     """
+    render_page_header(
+        "경보 상세",
+        "선택한 경보의 발생 근거와 표적·지역·센서 정보를 확인합니다.",
+        eyebrow="ALERT DETAIL",
+    )
+
     back_to = st.query_params.get("back_to")
     if back_to:
         target_page = st.session_state.get("_pages_by_url", {}).get(back_to)
@@ -156,13 +205,18 @@ def _render_focused_alert_view(focused_alert_id: str) -> None:
         return
 
     level_label = _LEVEL_DISPLAY.get(alert["alert_level"], alert["alert_level"])
-    st.markdown(f"### {level_label} {alert['title']}")
-    st.write(alert["message"])
-    st.caption(
-        f"{alert['asset_name']} / {alert['region_name']} / {alert['sensor_type']} | "
-        f"{alert['event_type']} {alert['previous_count']} -> {alert['current_count']} "
-        f"(delta {alert['delta_count']})"
-    )
+    with st.container(key="panel_alert_detail"):
+        render_section_header(
+            f"{level_label} {alert['title']}",
+            "경보 발생 근거와 변화량을 확인합니다.",
+            badge=alert["alert_level"],
+        )
+        st.write(alert["message"])
+        st.caption(
+            f"{alert['asset_name']} / {alert['region_name']} / {alert['sensor_type']} | "
+            f"{alert['event_type']} {alert['previous_count']} -> {alert['current_count']} "
+            f"(delta {alert['delta_count']})"
+        )
 
 
 def _render_alert_table(
@@ -229,35 +283,40 @@ def _render_alert_table(
 
 
 def _render_alert_detail(alert: Dict) -> None:
-    st.subheader("선택 경보 상세")
-    st.write(alert["message"])
-    st.caption(
-        f"{alert['asset_name']} / {alert['region_name']} / {alert['sensor_type']} | "
-        f"{alert['event_type']} {alert['previous_count']} -> {alert['current_count']} "
-        f"(delta {alert['delta_count']})"
-    )
+    with st.container(key="panel_alert_detail"):
+        render_section_header(
+            "선택 경보 상세",
+            "경보 내용을 확인하고 처리 또는 상세 메시지 생성을 진행합니다.",
+            badge=alert["alert_status"],
+        )
+        st.write(alert["message"])
+        st.caption(
+            f"{alert['asset_name']} / {alert['region_name']} / {alert['sensor_type']} | "
+            f"{alert['event_type']} {alert['previous_count']} -> {alert['current_count']} "
+            f"(delta {alert['delta_count']})"
+        )
 
-    left, right = st.columns(2)
-    with left:
-        disabled = alert["alert_status"] == "CHECKED"
-        if st.button("판독관 확인 처리", disabled=disabled, use_container_width=True):
-            try:
-                service.mark_checked(int(alert["alert_id"]))
-            except Exception as exc:
-                st.error(f"확인 처리 실패: {exc}")
-            else:
-                st.success("확인 처리했습니다.")
-                st.rerun()
+        left, right = st.columns(2)
+        with left:
+            disabled = alert["alert_status"] == "CHECKED"
+            if st.button("판독관 확인 처리", disabled=disabled, use_container_width=True):
+                try:
+                    service.mark_checked(int(alert["alert_id"]))
+                except Exception as exc:
+                    st.error(f"확인 처리 실패: {exc}")
+                else:
+                    st.success("확인 처리했습니다.")
+                    st.rerun()
 
-    with right:
-        if st.button("상세 메세지 생성", use_container_width=True):
-            try:
-                report_id, created = service.ensure_report_draft(int(alert["alert_id"]))
-            except Exception as exc:
-                st.error(f"상세 메세지 생성 실패: {exc}")
-            else:
-                verb = "생성" if created else "기존 메세지 확인"
-                st.success(f"상세 메세지 {verb}: report_id={report_id}")
+        with right:
+            if st.button("상세 메세지 생성", use_container_width=True):
+                try:
+                    report_id, created = service.ensure_report_draft(int(alert["alert_id"]))
+                except Exception as exc:
+                    st.error(f"상세 메세지 생성 실패: {exc}")
+                else:
+                    verb = "생성" if created else "기존 메세지 확인"
+                    st.success(f"상세 메세지 {verb}: report_id={report_id}")
 
     # 버튼 처리 뒤에 조회하므로, 방금 생성한 초안도 같은 화면에서 바로 보인다.
     _render_report_detail(int(alert["alert_id"]))
@@ -273,8 +332,12 @@ def _render_report_detail(alert_id: int) -> None:
     if report is None:
         return
 
-    st.subheader("메세지 상세")
-    with st.container(border=True):
+    with st.container(key="panel_alert_report"):
+        render_section_header(
+            "메시지 상세",
+            "선택 경보에 연결된 보고 메시지입니다.",
+            badge="REPORT",
+        )
         status_label = "배포됨" if report["report_status"] == "DISTRIBUTED" else "초안"
         st.markdown(f"**{report['title']}**")
         meta = (

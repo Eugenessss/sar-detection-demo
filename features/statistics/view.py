@@ -13,6 +13,7 @@ import altair as alt
 import streamlit as st
 
 from features.statistics import report, service
+from shared.ui import render_page_header, render_section_header
 
 _INTERVAL_LABELS = list(service.INTERVALS.keys())
 
@@ -27,13 +28,14 @@ _INTERVAL_KEY_SLUGS = {
 
 
 def _inject_highlighted_interval_css() -> None:
-    """기간 선택 버튼 중 24시간·1년 버튼을 부드러운 빨간색으로 강조하는 CSS를 주입한다."""
-    rules = "".join(
-        f'.st-key-interval_{_INTERVAL_KEY_SLUGS[label]} button {{'
-        f'background-color: #f6cac6; border-color: #e2a29c; color: #7a2b23;}}'
-        f'.st-key-interval_{_INTERVAL_KEY_SLUGS[label]} button:hover {{'
-        f'background-color: #f0b3ad; border-color: #d98a82;}}'
-        for label in service.HIGHLIGHTED_INTERVALS
+    """현재 선택된 기간 버튼을 프로젝트 주색상으로 강조한다."""
+    selected = st.session_state.get("stats_interval", service.DEFAULT_INTERVAL)
+    slug = _INTERVAL_KEY_SLUGS[selected]
+    rules = (
+        f'.st-key-interval_{slug} button {{'
+        'background-color:#4F8CFF; border-color:#4F8CFF; color:#FFFFFF;}'
+        f'.st-key-interval_{slug} button:hover {{'
+        'background-color:#6EA1FF; border-color:#6EA1FF; color:#FFFFFF;}'
     )
     st.markdown(f"<style>{rules}</style>", unsafe_allow_html=True)
 
@@ -92,8 +94,6 @@ def render_equipment_controls() -> Optional[List[str]]:
 
 def render_period_controls() -> tuple:
     """왼쪽 칸: 시작 일시(연/월/일/시 선택)·기간 선택 버튼·조회범위 안내를 세로로 몰아 그리고, (시작시각, 종료시각)을 돌려준다."""
-    st.subheader("조회 기간")
-
     today = datetime.date.today()
     if "stats_start_year" not in st.session_state:
         st.session_state.stats_start_year = today.year
@@ -168,6 +168,14 @@ def _render_actual_vs_average_chart(overlay_data, empty_message: str) -> None:
             tooltip=["class_name", "series", "captured_time:T", "detected_count:Q"],
         )
         .properties(height=380)
+        .configure_view(strokeOpacity=0)
+        .configure_axis(
+            gridColor="#223140",
+            domainColor="#34495e",
+            labelColor="#93a4b8",
+            titleColor="#e7edf5",
+        )
+        .configure_legend(labelColor="#93a4b8", titleColor="#e7edf5", orient="bottom")
         .interactive()
     )
     st.altair_chart(chart, use_container_width=True)
@@ -194,7 +202,11 @@ def render_graph_column(
         st.warning("해당 기간에 조회된 탐지 결과가 없습니다.")
         return
 
-    st.subheader("시간대별 탐지 추이")
+    render_section_header(
+        "시간대별 탐지 추이",
+        f"{start:%Y-%m-%d %H:%M}부터 {end:%Y-%m-%d %H:%M}까지",
+        badge=interval_label,
+    )
     selected_region = None if region == "전체" else region
     time_series = service.pivot_time_series(result.raw, selected_region, equipment)
 
@@ -220,44 +232,60 @@ def render_report_section(
     time_series,
 ) -> None:
     """원본 조회 결과 아래: 담당 분석관·분석 내용을 입력받아 통계 보고서(.docx)를 만들어 내려받는다."""
-    st.subheader("통계 보고서")
-    analyst_name = st.text_input("담당 분석관", key="report_analyst_name")
-    analysis_text = st.text_area(
-        "분석 내용",
-        key="report_analysis_text",
-        height=150,
-        placeholder="보고서에 실릴 분석 내용을 입력하세요.",
-    )
+    with st.container(key="panel_statistics_report"):
+        render_section_header(
+            "통계 보고서",
+            "분석관 의견을 포함한 HTML 통계 보고서를 생성합니다.",
+            badge="REPORT",
+        )
+        analyst_name = st.text_input("담당 분석관", key="report_analyst_name")
+        analysis_text = st.text_area(
+            "분석 내용",
+            key="report_analysis_text",
+            height=150,
+            placeholder="보고서에 실릴 분석 내용을 입력하세요.",
+        )
 
-    report_html = report.build_statistics_report(
-        start=start,
-        end=end,
-        region_label=region_label,
-        analyst_name=analyst_name,
-        analysis_text=analysis_text,
-        time_series=time_series,
-    )
-    st.download_button(
-        "통계 보고서 다운로드 (.html)",
-        data=report_html,
-        file_name=f"{start:%Y%m%d}_{region_label}_통계보고서.html",
-        mime="text/html",
-        use_container_width=True,
-    )
+        report_html = report.build_statistics_report(
+            start=start,
+            end=end,
+            region_label=region_label,
+            analyst_name=analyst_name,
+            analysis_text=analysis_text,
+            time_series=time_series,
+        )
+        st.download_button(
+            "통계 보고서 다운로드 (.html)",
+            data=report_html,
+            file_name=f"{start:%Y%m%d}_{region_label}_통계보고서.html",
+            mime="text/html",
+            use_container_width=True,
+        )
 
 
 def render_statistics_page() -> None:
     """통계 페이지 전체를 그린다: 왼쪽 좁은 칸(장소 선택 + 조회 기간 + 장비 선택) + 오른쪽 넓은 칸(그래프, 제목 바로 아래)."""
-    st.title("탐지 통계")
-    st.caption("기간별 장비 탐지 추이 (왼쪽 장소·장비 선택으로 필터 가능)")
+    render_page_header(
+        "탐지 통계",
+        "기간·지역·위협등급·장비별 탐지 추이를 분석하고 통계 보고서를 생성합니다.",
+        eyebrow="DETECTION ANALYTICS",
+        status="통계 데이터 연결",
+    )
 
-    controls_col, graph_col = st.columns([1, 3])
+    controls_col, graph_col = st.columns([1, 2.7], gap="large")
 
     with controls_col:
-        region = render_location_control()
-        equipment = render_equipment_controls()
-        start, end, interval_label = render_period_controls()
+        with st.container(key="panel_statistics_filters"):
+            render_section_header(
+                "조회 조건",
+                "장소·위협등급·장비와 분석 기간을 설정합니다.",
+                badge="FILTER",
+            )
+            region = render_location_control()
+            equipment = render_equipment_controls()
+            start, end, interval_label = render_period_controls()
 
 
     with graph_col:
-        render_graph_column(start, end, region, equipment, interval_label)
+        with st.container(key="panel_statistics_graph"):
+            render_graph_column(start, end, region, equipment, interval_label)

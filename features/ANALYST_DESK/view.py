@@ -6,15 +6,21 @@ import streamlit as st
 from features.ANALYST_DESK import service
 from features.statistics import service as stats_service
 from shared import tactical_map
-from shared.ui_chrome import bracket_panel, render_command_bar, section_label
+from shared.ui import MetricItem, render_metric_grid, render_page_header, render_section_header
 
 
-def _render_map_column() -> None:
+def _render_map_column(default_alerts: list | None = None) -> None:
     """왼쪽 칸: 한반도 위성사진 + 경보 마커 지도. 마커를 누르면 EO/SAR 판독 페이지로 바로 이동한다.
 
-    shared.tactical_map의 CCv2(진짜 양방향) 커스텀 지도를 쓴다 — folium/st_folium
-    기본 위젯 모양이 안 섞이면서도, 마커 클릭 시 Python으로 값이 그대로 돌아온다.
+    shared.tactical_map의 CCv2(진짜 양방향) 커스텀 지도를 쓴다 — 마커를 클릭하면
+    Python으로 alert_id가 그대로 돌아온다.
     """
+    render_section_header(
+        "경보 상황 지도",
+        "센서별 최신 변화 경보를 한반도 작전 지도에서 확인합니다.",
+        badge="LIVE MAP",
+    )
+
     # 센서 필터: 경보는 센서(EO/SAR)별 독립 체인으로 생성되므로, "전체"에서는
     # 지역별 최신 1건에 다른 센서의 경보가 가려질 수 있다. 센서를 고르면
     # 그 센서의 경보만 대상으로 지역별 최신 1건씩 표시한다.
@@ -31,23 +37,33 @@ def _render_map_column() -> None:
 
     # 경보(alert_id) 목록을 DB에서 조회해 지도에 마커로 표시.
     # 색은 경보수준(긴급/중요/특이)에 따라 다르게 찍는다.
-    try:
-        alerts = service.get_alerts(sensor)
-    except Exception as exc:
-        st.error(f"경보 조회 실패: {exc}")
-        alerts = []
+    if sensor is None and default_alerts is not None:
+        alerts = default_alerts
+    else:
+        try:
+            alerts = service.get_alerts(sensor)
+        except Exception as exc:
+            st.error(f"경보 조회 실패: {exc}")
+            alerts = []
 
     if not alerts and sensor:
         st.info(f"{sensor} 경보가 없습니다.")
 
-    # 범례는 지도 위에 안 띄우고, 지도 바로 위에 한 줄로 둔다.
-    section_label("Map Legend")
-    st.markdown("🔴 긴급 · 🟠 중요 · 🔵 특이 (마커를 누르면 EO/SAR 판독 페이지로 이동)")
+    st.html(
+        """
+        <div class="ui-map-legend" aria-label="경보 수준 범례">
+          <span><i style="background:#DC2626"></i>긴급</span>
+          <span><i style="background:#D97706"></i>중요</span>
+          <span><i style="background:#2563EB"></i>특이</span>
+          <span>마커 선택 시 EO/SAR 판독으로 이동</span>
+        </div>
+        """
+    )
 
     clicked_alert_id = tactical_map.render_tactical_map(
         tile_url, alerts, service.NORTH_KOREA_BOUNDS,
         marker_label=service.marker_label,
-        height=650,
+        height=530,
         key="analyst_tactical_map",
     )
     if clicked_alert_id is not None:
@@ -73,7 +89,20 @@ def _render_24h_chart(overlay_data) -> None:
             strokeDash=alt.StrokeDash("series:N", title="구분 (실제/평균)"),
             tooltip=["class_name", "series", "captured_time:T", "detected_count:Q"],
         )
-        .properties(height=610)
+        .properties(height=455)
+        .configure_view(strokeOpacity=0)
+        .configure_axis(
+            gridColor="#223140",
+            domainColor="#34495e",
+            labelColor="#93a4b8",
+            titleColor="#e7edf5",
+            tickColor="#34495e",
+        )
+        .configure_legend(
+            labelColor="#93a4b8",
+            titleColor="#e7edf5",
+            orient="bottom",
+        )
         .interactive()
     )
     st.altair_chart(chart, use_container_width=True)
@@ -115,7 +144,11 @@ def _render_statistics_detail_button() -> None:
 def _render_statistics_column() -> None:
     """오른쪽 칸: 지역 선택(팝오버) 하나만 두고, 조회 시점(현재 시각) 기준 최근 24시간
     탐지 통계 그래프를 보여준 뒤, 그 아래에 상세 통계 페이지로 이동하는 버튼을 둔다."""
-    st.subheader("최근 24시간 탐지 통계")
+    render_section_header(
+        "최근 24시간 탐지 추이",
+        "실제 탐지 건수와 2시간 이동 평균을 비교합니다.",
+        badge="24 HOURS",
+    )
 
     region = _render_region_control()
 
@@ -145,16 +178,40 @@ def _render_statistics_column() -> None:
 
 def render_map_view() -> None:
     """왼쪽엔 경보 지도, 오른쪽엔 최근 24시간 탐지 통계 그래프를 나란히 보여준다."""
-    render_command_bar("영상판독관 페이지")
+    render_page_header(
+        "분석 현황",
+        "EO·SAR 변화 경보와 최근 탐지 추이를 한 화면에서 확인하고 판독 업무로 연결합니다.",
+        eyebrow="ANALYST WORKSPACE",
+        status="분석 시스템 정상",
+    )
 
-    map_col, stats_col = st.columns([1, 1], gap="large")
+    try:
+        summary_alerts = service.get_alerts()
+    except Exception:
+        summary_alerts = []
+
+    urgent_count = sum(alert.alert_level == "URGENT" for alert in summary_alerts)
+    important_count = sum(alert.alert_level == "IMPORTANT" for alert in summary_alerts)
+    sensors = {alert.sensor_type for alert in summary_alerts if alert.sensor_type}
+    render_metric_grid(
+        [
+            MetricItem("활성 경보", f"{len(summary_alerts)}건", "지역별 최신 경보", "primary"),
+            MetricItem("긴급 경보", f"{urgent_count}건", "즉시 판독 필요", "danger"),
+            MetricItem("중요 경보", f"{important_count}건", "우선순위 검토 대상", "warning"),
+            MetricItem("운용 센서", f"{len(sensors)}종", "EO · SAR 연계", "sky"),
+        ]
+    )
+
+    st.html('<div style="height:10px" aria-hidden="true"></div>')
+
+    map_col, stats_col = st.columns([1.08, 0.92], gap="large")
 
     with map_col:
-        with bracket_panel("analyst_map_panel"):
-            _render_map_column()
+        with st.container(key="panel_analyst_map"):
+            _render_map_column(summary_alerts)
 
     with stats_col:
-        with bracket_panel("analyst_stats_panel"):
+        with st.container(key="panel_analyst_statistics"):
             _render_statistics_column()
 
 
