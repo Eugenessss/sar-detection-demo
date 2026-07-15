@@ -13,6 +13,25 @@ from shared.ui import MetricItem, render_metric_grid, render_page_header, render
 _CLICK_MATCH_TOLERANCE = 0.001
 
 
+# 이 페이지(로그인 첫 화면)는 위젯 상호작용마다 rerun되며 전체가 다시 실행된다.
+# 아래 조회들을 짧은 TTL로 캐싱해, 필터·지도 클릭 때마다 같은 DB 조회를 반복하지
+# 않게 한다(다른 페이지들과 동일한 @st.cache_data 패턴). 데이터가 초 단위로 바뀌지
+# 않으므로 수십 초 캐시로도 화면 최신성은 충분하다.
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_alerts(sensor=None):
+    return service.get_alerts(sensor)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_region_latest():
+    return stats_service.latest_captured_time_by_region()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_statistics(start, end):
+    return stats_service.build_statistics(start, end)
+
+
 def _find_alert_by_click(lat: float, lng: float, alerts: list) -> "service.Alert | None":
     """지도에서 클릭된 좌표와 가장 가까운(오차범위 내) 경보를 찾는다."""
     for alert in alerts:
@@ -50,7 +69,7 @@ def _render_map_column(default_alerts: list | None = None) -> None:
         alerts = default_alerts
     else:
         try:
-            alerts = service.get_alerts(sensor)
+            alerts = _cached_alerts(sensor)
         except Exception as exc:
             st.error(f"경보 조회 실패: {exc}")
             alerts = []
@@ -173,7 +192,7 @@ def _render_statistics_column() -> None:
     )
 
     try:
-        region_latest = stats_service.latest_captured_time_by_region()
+        region_latest = _cached_region_latest()
     except Exception as exc:
         st.error(f"통계 조회 실패: {exc}")
         _render_statistics_detail_button()
@@ -190,7 +209,7 @@ def _render_statistics_column() -> None:
             start, end = stats_service.resolve_range(
                 latest - datetime.timedelta(hours=24), "24시간"
             )  # end == latest (그 지역의 마지막 촬영시각)
-            result = stats_service.build_statistics(start, end)
+            result = _cached_statistics(start, end)
             if result is None:
                 st.markdown(f"**{region}**")
                 st.caption(
@@ -220,7 +239,7 @@ def render_map_view() -> None:
     )
 
     try:
-        summary_alerts = service.get_alerts()
+        summary_alerts = _cached_alerts()
     except Exception:
         summary_alerts = []
 

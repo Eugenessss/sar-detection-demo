@@ -19,11 +19,34 @@ from shared.ui import render_page_header, render_section_header
 _INTERVAL_LABELS = list(service.INTERVALS.keys())
 
 
+# 이 페이지도 위젯 상호작용마다 rerun되어 전체가 다시 실행되므로, DB 조회를 캐싱해
+# 필터를 바꿀 때마다 같은 조회를 반복하지 않게 한다. 지역·장비 목록은 거의 변하지
+# 않는 참조 데이터라 TTL을 길게, 통계 집계는 짧게 잡는다.
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_regions():
+    return service.list_regions()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_equipment_classes(threat_levels):
+    return service.list_equipment_classes(threat_levels)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_latest():
+    return service.latest_captured_time()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_statistics(start, end):
+    return service.build_statistics(start, end)
+
+
 def render_location_control() -> str:
     """왼쪽 칸 맨 위: 장소 선택 팝오버 하나를 그리고, 그 안에 지역 이름을 버튼으로 바로 나열한다.
     선택된 region_name을 돌려준다 ("전체"면 필터 없음)."""
     try:
-        regions = service.list_regions()
+        regions = _cached_regions()
     except Exception as exc:
         st.error(f"지역 목록 조회 실패: {exc}")
         regions = []
@@ -58,7 +81,7 @@ def render_equipment_controls() -> Optional[List[str]]:
         return []
 
     try:
-        equipment_classes = service.list_equipment_classes(selected_threat_levels)
+        equipment_classes = _cached_equipment_classes(selected_threat_levels)
     except Exception as exc:
         st.error(f"장비 목록 조회 실패: {exc}")
         return None
@@ -83,7 +106,7 @@ def render_period_controls() -> tuple:
         # 시작으로 두면 창이 빈 미래로 향해 첫 화면이 비어 보인다. 그래서 창이 마지막
         # 촬영일 다음 0시에 끝나도록(=그 날 데이터까지 포함) 시작일을 기간만큼 뒤로 당긴다.
         try:
-            anchor = service.latest_captured_time()
+            anchor = _cached_latest()
         except Exception:
             anchor = None
         anchor_date = anchor.date() if anchor is not None else today
@@ -228,7 +251,7 @@ def render_graph_column(
     한 그래프에 겹쳐 그린다."""
     with st.spinner("통계 조회 중..."):
         try:
-            result = service.build_statistics(start, end)
+            result = _cached_statistics(start, end)
         except Exception as exc:
             st.error(f"통계 조회 실패: {exc}")
             st.stop()
