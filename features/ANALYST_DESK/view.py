@@ -22,6 +22,11 @@ def _cached_alerts(sensor=None):
     return service.get_alerts(sensor)
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_map_regions():
+    return service.get_map_regions()
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def _cached_region_latest():
     return stats_service.latest_captured_time_by_region()
@@ -77,6 +82,25 @@ def _render_map_column(default_alerts: list | None = None) -> None:
     if not alerts and sensor:
         st.info(f"{sensor} 경보가 없습니다.")
 
+    try:
+        regions = _cached_map_regions()
+    except Exception as exc:
+        st.error(f"지역 조회 실패: {exc}")
+        regions = []
+
+    # 현재 센서 필터 기준으로 경보가 없는 지역은 초록색 정상 마커로 표시한다.
+    # 정상 마커는 alerts에 포함되지 않으므로 클릭해도 경보 상세 화면으로 이동하지 않는다.
+    alert_region_ids = {
+        alert.region_id for alert in alerts if alert.region_id is not None
+    }
+    for region in regions:
+        if region.region_id not in alert_region_ids:
+            service.add_circle_marker(
+                m, region.latitude, region.longitude,
+                color=service.NORMAL_MARKER_COLOR,
+                tooltip=f"[정상] 특이사항 없음",
+            )
+
     for alert in alerts:
         level_label = service.marker_label(alert.alert_level)
         service.add_circle_marker(
@@ -91,7 +115,8 @@ def _render_map_column(default_alerts: list | None = None) -> None:
           <span><i style="background:#DC2626"></i>긴급</span>
           <span><i style="background:#D97706"></i>중요</span>
           <span><i style="background:#2563EB"></i>특이</span>
-          <span>마커 선택 시 EO/SAR 판독으로 이동</span>
+          <span><i style="background:#16A34A"></i>정상</span>
+          <span>경보 마커 선택 시 EO/SAR 판독으로 이동</span>
         </div>
         """
     )

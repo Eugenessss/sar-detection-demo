@@ -46,6 +46,7 @@ ALERT_LEVEL_COLORS = {
     "NOTICE": "blue",
 }
 DEFAULT_MARKER_COLOR = "gray"  # 알 수 없는 경보수준이 들어와도 지도가 깨지지 않도록
+NORMAL_MARKER_COLOR = "#16A34A"  # 경보가 없는 지역은 초록색 정상 마커로 표시
 
 # 지도에는 전체 경보 이력이 아니라, 지역(region)별로 가장 최근에 생성된 경보
 # 1건씩만 표시한다. (예: 개성시·원산시에 각각 경보가 여러 건 있어도, 지역마다
@@ -91,6 +92,13 @@ _LATEST_ALERTS_PER_REGION_QUERY = f"""
     ORDER BY created_at DESC
 """
 
+_REGIONS_QUERY = f"""
+    SELECT region_id, region_name, latitude, longitude
+    FROM `{_DB}`.`region`
+    WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+    ORDER BY region_id
+"""
+
 
 @dataclass
 class Alert:
@@ -108,6 +116,15 @@ class Alert:
     summary: str = ""      # 변화요약(경보 발생 근거)
     region: str = ""       # 지역
     region_id: Optional[int] = None  # 지역 ID (상세 화면의 센서 전환에 사용)
+
+
+@dataclass
+class MapRegion:
+    """경보 유무와 관계없이 상황지도에 표시할 지역 좌표."""
+    region_id: int
+    region_name: str
+    latitude: float
+    longitude: float
 
 
 def _row_to_alert(row) -> Alert:
@@ -142,6 +159,21 @@ def get_alerts(sensor: Optional[str] = None) -> List[Alert]:
             text(_LATEST_ALERTS_PER_REGION_QUERY.format(where=where)), params
         )
         return [_row_to_alert(row) for row in rows]
+
+
+def get_map_regions() -> List[MapRegion]:
+    """좌표가 등록된 모든 지역을 조회한다 (정상 마커 표시용)."""
+    with get_engine().connect() as conn:
+        rows = conn.execute(text(_REGIONS_QUERY))
+        return [
+            MapRegion(
+                region_id=int(row.region_id),
+                region_name=row.region_name or "지역 미상",
+                latitude=float(row.latitude),
+                longitude=float(row.longitude),
+            )
+            for row in rows
+        ]
 
 
 def get_latest_alert_id(region_id: int, sensor: str) -> Optional[int]:
@@ -255,10 +287,15 @@ def add_circle_marker(map_obj: folium.Map, latitude: float, longitude: float, co
 _NORTH_KOREA_BOUNDS = [[37.5, 124.0], [43.2, 130.8]]  # [남(DMZ 부근)], [북동(나선/신의주 위)]
 
 
-def build_eo_map(location=(40.3, 127.4), zoom_start: int = 7) -> folium.Map:
+def build_eo_map(location=(40, 126.5), zoom_start: float = 6.8) -> folium.Map:
     """북한 전체가 보이도록 맞춘 일반 작전 지도를 만든다 (지도·상세 화면 공용)."""
-    map_obj = folium.Map(location=list(location), zoom_start=zoom_start)
-    map_obj.fit_bounds(_NORTH_KOREA_BOUNDS)
+    map_obj = folium.Map(
+        location=list(location),
+        zoom_start=zoom_start,
+        zoom_snap=0.5,
+        zoom_delta=0.5
+    )
+    # map_obj.fit_bounds(_NORTH_KOREA_BOUNDS)
     return map_obj
 
 
