@@ -95,27 +95,27 @@ def _render_map_column(default_alerts: list | None = None) -> None:
     }
     for region in regions:
         if region.region_id not in alert_region_ids:
-            service.add_circle_marker(
+            service.add_status_marker(
                 m, region.latitude, region.longitude,
-                color=service.NORMAL_MARKER_COLOR,
+                status=service.NORMAL_STATUS,
                 tooltip=f"[정상] 특이사항 없음",
             )
 
     for alert in alerts:
         level_label = service.marker_label(alert.alert_level)
-        service.add_circle_marker(
+        service.add_status_marker(
             m, alert.latitude, alert.longitude,
-            color=service.marker_color(alert.alert_level),
+            status=alert.alert_level,
             tooltip=f"[{level_label}·{alert.sensor_type}] {alert.asset_name}",
         )
 
     st.html(
         """
         <div class="ui-map-legend" aria-label="경보 수준 범례">
-          <span><i style="background:#DC2626"></i>긴급</span>
-          <span><i style="background:#D97706"></i>중요</span>
-          <span><i style="background:#2563EB"></i>특이</span>
-          <span><i style="background:#16A34A"></i>정상</span>
+          <span><i style="width:10px;height:10px;background:#DC2626;border-radius:0;clip-path:polygon(25% 0,75% 0,100% 50%,75% 100%,25% 100%,0 50%)"></i>긴급</span>
+          <span><i style="width:10px;height:10px;background:#D97706;border-radius:0;clip-path:polygon(50% 0,100% 100%,0 100%)"></i>중요</span>
+          <span><i style="width:9px;height:9px;background:#2563EB;border-radius:0;transform:rotate(45deg)"></i>특이</span>
+          <span><i style="width:9px;height:9px;background:#16A34A"></i>정상</span>
           <span>경보 마커 선택 시 EO/SAR 판독으로 이동</span>
         </div>
         """
@@ -150,7 +150,7 @@ def _render_map_column(default_alerts: list | None = None) -> None:
 
 
 def _render_region_chart(region: str, overlay_data, start, end) -> None:
-    """한 지역의 실제(실선+점)/2시간 평균(점선) 추이 그래프 하나를 그린다.
+    """한 지역의 시점별 실제 탐지 추이 그래프 하나를 그린다.
 
     촬영 주기가 2시간이므로 X축 틱도 2시간 간격으로 고정하고, 축 범위는 조회 창
     [start, end] 전체로 잡아 데이터가 한쪽에 몰려도 창이 온전히 보이게 한다.
@@ -160,7 +160,8 @@ def _render_region_chart(region: str, overlay_data, start, end) -> None:
     """
     st.markdown(f"**{region}**")
     st.caption(f"{start:%Y-%m-%d %H:%M} ~ {end:%Y-%m-%d %H:%M} · 마지막 촬영 시점 기준 24시간")
-    if overlay_data.empty:
+    actual_data = overlay_data[overlay_data["series"] == "실제"]
+    if actual_data.empty:
         st.info(f"{region}: 이 기간에 표시할 통계가 없습니다.")
         return
 
@@ -172,7 +173,7 @@ def _render_region_chart(region: str, overlay_data, start, end) -> None:
     ]
 
     chart = (
-        alt.Chart(overlay_data)
+        alt.Chart(actual_data)
         .mark_line(point=True)
         .encode(
             x=alt.X(
@@ -183,8 +184,7 @@ def _render_region_chart(region: str, overlay_data, start, end) -> None:
             ),
             y=alt.Y("detected_count:Q", title="탐지 수"),
             color=alt.Color("class_name:N", title="장비"),
-            strokeDash=alt.StrokeDash("series:N", title="구분 (실제/평균)"),
-            tooltip=["class_name", "series", "captured_time:T", "detected_count:Q"],
+            tooltip=["class_name", "captured_time:T", "detected_count:Q"],
         )
         .properties(height=200)
     )
@@ -212,7 +212,7 @@ def _render_statistics_column() -> None:
     """
     render_section_header(
         "지역별 24시간 탐지 추이",
-        "지역마다 마지막 촬영 시점 기준 24시간의 실제 탐지와 2시간 구간 평균을 비교합니다.",
+        "지역마다 마지막 촬영 시점 기준 24시간의 실제 탐지 추이를 표시합니다.",
         badge="24 HOURS",
     )
 

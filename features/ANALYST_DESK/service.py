@@ -41,11 +41,11 @@ ALERT_LEVEL_LABELS = {
     "NOTICE": "특이",
 }
 ALERT_LEVEL_COLORS = {
-    "URGENT": "red",
-    "IMPORTANT": "orange",
-    "NOTICE": "blue",
+    "URGENT": "#DC2626",
+    "IMPORTANT": "#D97706",
+    "NOTICE": "#2563EB",
 }
-DEFAULT_MARKER_COLOR = "gray"  # 알 수 없는 경보수준이 들어와도 지도가 깨지지 않도록
+DEFAULT_MARKER_COLOR = "#64748B"  # 알 수 없는 경보수준이 들어와도 지도가 깨지지 않도록
 NORMAL_MARKER_COLOR = "#16A34A"  # 경보가 없는 지역은 초록색 정상 마커로 표시
 
 # 지도에는 전체 경보 이력이 아니라, 지역(region)별로 가장 최근에 생성된 경보
@@ -253,7 +253,7 @@ def get_alert_images(alert_id: int) -> List[Path]:
 
 
 def marker_color(alert_level: str) -> str:
-    """경보수준(enum) 문자열을 folium 마커 색상 이름으로 바꾼다."""
+    """경보수준(enum) 문자열을 상황지도 마커 색상으로 바꾼다."""
     return ALERT_LEVEL_COLORS.get(alert_level, DEFAULT_MARKER_COLOR)
 
 
@@ -262,22 +262,133 @@ def marker_label(alert_level: str) -> str:
     return ALERT_LEVEL_LABELS.get(alert_level, alert_level)
 
 
-# 지도를 한반도 전체가 보이도록 축소하고 나니, 기본 Leaflet 핀 마커(folium.Icon)가
-# 화면 대비 너무 커 보여서 작은 원형 마커(CircleMarker)로 통일한다.
-MARKER_RADIUS_PX = 8
+NORMAL_STATUS = "NORMAL"
+
+_STATUS_MARKER_SIZES = {
+    NORMAL_STATUS: 18,
+    "NOTICE": 20,
+    "IMPORTANT": 22,
+    "URGENT": 24,
+}
+_STATUS_MARKER_Z_INDEX = {
+    NORMAL_STATUS: 0,
+    "NOTICE": 100,
+    "IMPORTANT": 200,
+    "URGENT": 300,
+}
+_STATUS_MARKER_CSS = """
+<style>
+  .ops-status-div-icon {
+    background: transparent !important;
+    border: 0 !important;
+  }
+  .ops-status-marker {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    filter: drop-shadow(0 1px 2px rgba(15, 23, 42, 0.55));
+  }
+  .ops-status-marker svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+  }
+  .ops-status-marker--normal {
+    cursor: default;
+  }
+  .ops-status-marker--urgent::after {
+    content: "";
+    position: absolute;
+    inset: -4px;
+    border: 2px solid rgba(220, 38, 38, 0.65);
+    border-radius: 50%;
+    pointer-events: none;
+    animation: ops-status-pulse 1.7s ease-out infinite;
+  }
+  @keyframes ops-status-pulse {
+    0% { opacity: 0.9; transform: scale(0.72); }
+    75%, 100% { opacity: 0; transform: scale(1.2); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .ops-status-marker--urgent::after { animation: none; }
+  }
+</style>
+"""
 
 
-def add_circle_marker(map_obj: folium.Map, latitude: float, longitude: float, color: str, tooltip: str) -> None:
-    """작은 원형 마커 하나를 지도에 추가한다 (경보 지도·아군 자산 지도 공용)."""
-    folium.CircleMarker(
+def _status_marker_svg(status: str, color: str) -> str:
+    """상태별 전술형 도형과 내부 기호를 SVG로 만든다."""
+    if status == NORMAL_STATUS:
+        shape = '<circle cx="12" cy="12" r="9" />'
+        symbol = (
+            '<path d="M7.5 12.3l3 3.1 6.2-7" fill="none" stroke="white" '
+            'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />'
+        )
+    elif status == "NOTICE":
+        shape = '<polygon points="12,1.5 22.5,12 12,22.5 1.5,12" />'
+        symbol = '<circle cx="12" cy="12" r="2.1" fill="white" stroke="none" />'
+    elif status == "IMPORTANT":
+        shape = '<polygon points="12,1.5 22.5,21.5 1.5,21.5" />'
+        symbol = (
+            '<rect x="10.9" y="8" width="2.2" height="7" rx="1.1" fill="white" stroke="none" />'
+            '<circle cx="12" cy="18.2" r="1.25" fill="white" stroke="none" />'
+        )
+    elif status == "URGENT":
+        shape = '<polygon points="6,1.5 18,1.5 23,12 18,22.5 6,22.5 1,12" />'
+        symbol = (
+            '<rect x="10.8" y="6.5" width="2.4" height="8.5" rx="1.2" fill="white" stroke="none" />'
+            '<circle cx="12" cy="18.2" r="1.35" fill="white" stroke="none" />'
+        )
+    else:
+        shape = '<circle cx="12" cy="12" r="9" />'
+        symbol = '<circle cx="12" cy="12" r="2" fill="white" stroke="none" />'
+
+    return f"""
+<div class="ops-status-marker ops-status-marker--{status.lower()}">
+  <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <g fill="{color}" stroke="white" stroke-width="2" stroke-linejoin="round">
+      {shape}
+    </g>
+    {symbol}
+  </svg>
+</div>
+"""
+
+
+def add_status_marker(
+    map_obj: folium.Map,
+    latitude: float,
+    longitude: float,
+    status: str,
+    tooltip: str,
+) -> None:
+    """상태별 색상·형태를 가진 전술형 마커 하나를 지도에 추가한다."""
+    normalized_status = (status or "").upper()
+    if normalized_status not in _STATUS_MARKER_SIZES:
+        normalized_status = "UNKNOWN"
+
+    size = _STATUS_MARKER_SIZES.get(normalized_status, 20)
+    color = (
+        NORMAL_MARKER_COLOR
+        if normalized_status == NORMAL_STATUS
+        else marker_color(normalized_status)
+    )
+    map_obj.get_root().header.add_child(
+        folium.Element(_STATUS_MARKER_CSS),
+        name="analyst-status-marker-css",
+    )
+    folium.Marker(
         location=[latitude, longitude],
-        radius=MARKER_RADIUS_PX,
-        color="white",
-        weight=1.5,
-        fill=True,
-        fill_color=color,
-        fill_opacity=0.9,
+        icon=folium.DivIcon(
+            html=_status_marker_svg(normalized_status, color),
+            icon_size=(size, size),
+            icon_anchor=(size // 2, size // 2),
+            class_name="ops-status-div-icon",
+        ),
         tooltip=tooltip,
+        rise_on_hover=True,
+        z_index_offset=_STATUS_MARKER_Z_INDEX.get(normalized_status, 50),
     ).add_to(map_obj)
 
 

@@ -42,6 +42,11 @@ def _cached_statistics(start, end):
     return service.build_statistics(start, end)
 
 
+def _set_stats_region(region_name: str) -> None:
+    """장소 버튼 콜백: 다음 화면 렌더링 전에 선택 지역을 갱신한다."""
+    st.session_state["stats_region"] = region_name
+
+
 def render_location_control() -> str:
     """왼쪽 칸 맨 위: 장소 선택 팝오버 하나를 그리고, 그 안에 지역 이름을 버튼으로 바로 나열한다.
     선택된 region_name을 돌려준다 ("전체"면 필터 없음)."""
@@ -56,8 +61,13 @@ def render_location_control() -> str:
 
     with st.popover(f"장소 선택 ({st.session_state.stats_region})", use_container_width=True):
         for region_name in ["전체"] + regions:
-            if st.button(region_name, use_container_width=True, key=f"region_{region_name}"):
-                st.session_state.stats_region = region_name
+            st.button(
+                region_name,
+                use_container_width=True,
+                key=f"region_{region_name}",
+                on_click=_set_stats_region,
+                args=(region_name,),
+            )
 
     return st.session_state.stats_region
 
