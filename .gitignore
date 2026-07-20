@@ -236,6 +236,4 @@ outputs/
 .agents
 .claude
 
-# 이미지 파일 제거
-original_image/
-result_image/
+# local-mysql 브랜치: original_image/·result_image/는 이미지가 곧 데이터라 폴더째 커밋한다.
