@@ -48,7 +48,6 @@ demo/
 ├─ shared/                      # 모든 feature가 함께 쓰는 공용/인프라 (features를 참조하지 않음)
 │  ├─ ui/                       # 상단 navbar, 페이지 헤더·메트릭 카드 등 공용 UI + 전역 CSS 로더
 │  ├─ charts.py                 # Altair 차트 공통 팔레트·축 테마
-│  ├─ eo_map.py                 # Earth Engine Sentinel-2 지도 공통 생성·캐시
 │  ├─ auth.py                   # app_user 로그인 검증
 │  ├─ database.py               # 로컬 MySQL 연결 (.env에서 접속 정보 로드)
 │  ├─ s3_store.py               # 원본/결과 이미지 저장소 (로컬 폴더 — S3 버전과 같은 인터페이스)
@@ -143,8 +142,8 @@ streamlit run app.py
 
 브라우저에서 `http://localhost:8501`로 접속한 뒤, `app_user` 테이블의 분석관 또는 지휘관 계정으로 로그인합니다.
 
-> 지도(분석 현황·지휘관 현황·경보 상세)는 Google Earth Engine의 Sentinel-2 타일을 사용합니다.
-> 처음 실행하는 PC에서는 `earthengine authenticate`로 1회 인증이 필요합니다 (미인증 시 첫 지도 로드 때 인증 창이 뜹니다).
+> 지도(분석 현황·지휘관 현황·경보 상세)는 OpenStreetMap 공개 타일을 브라우저가 직접 받아 그립니다.
+> 별도 인증·API 키는 필요 없고, 인터넷 연결만 있으면 됩니다.
 
 ### 자주 겪는 문제
 
